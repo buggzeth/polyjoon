@@ -221,13 +221,19 @@ export async function analyzeEvent(
 
     // 9. SET TRIAL COOKIE (If this was a free run)
     if (!paymentTx) {
-      cookieStore.set(TRIAL_COOKIE_NAME, "true", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        maxAge: 60 * 60 * 24 * 365 * 10, // 10 Years
-        path: "/",
-        sameSite: "lax"
-      });
+      try {
+        cookieStore.set(TRIAL_COOKIE_NAME, "true", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          maxAge: 60 * 60 * 24 * 365 * 10,
+          path: "/",
+          sameSite: "lax"
+        });
+      } catch (e) {
+        // Ignore cookie errors if the client has disconnected; 
+        // the analysis is saved in DB, which is what matters.
+        console.warn("Client disconnected, could not set trial cookie.");
+      }
     }
 
     return {

@@ -2,6 +2,8 @@
 import { getAnalysisHistory } from "../../actions/storage";
 import AnalysisView from "../../components/AnalysisView";
 
+export const maxDuration = 60; 
+
 // Note: In Next.js App Router, searchParams is passed as a prop
 interface PageProps {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;

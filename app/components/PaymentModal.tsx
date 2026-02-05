@@ -85,7 +85,7 @@ export default function PaymentModal({
             {isProcessing ? (
                 <>
                     <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                    <span>Processing...</span>
+                    <span>Processing. Do not Close.</span>
                 </>
             ) : (
                 <span>Confirm & Pay</span>

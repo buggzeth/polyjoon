@@ -106,7 +106,7 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
         >
           {checking ? (
             <div className="flex items-center gap-3">
-                <span className="text-[10px]">SCANNING</span>
+                <span className="text-[10px]">SCANNING, DON'T CLOSE THIS PAGE</span>
                 <div className="flex gap-1">
                    <span className="animate-bounce delay-0 text-lg">🦀</span>
                    <span className="animate-bounce delay-75 text-lg">🦀</span>

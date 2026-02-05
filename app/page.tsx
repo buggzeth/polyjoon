@@ -5,6 +5,8 @@ import EventFeed from "./components/EventFeed";
 
 export const dynamic = 'force-dynamic';
 
+export const maxDuration = 60;
+
 export default async function Home() {
   const initialEvents = await fetchEvents(0, 50);
 

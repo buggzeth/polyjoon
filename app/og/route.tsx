@@ -4,12 +4,8 @@ import { ImageResponse } from 'next/og';
 export const runtime = 'edge';
 
 export async function GET(request: Request) {
-  // 1. Determine the base URL
-  const { protocol, host } = new URL(request.url);
   
-  // 2. Construct image URL. 
-  // IMPORTANT: Ensure 'public/og-mascot.png' exists in your project.
-  const characterImage = `${protocol}//${host}/og-mascot.png`;
+  const characterImage = `https://nuke.farm/og-mascot.png`;
 
   return new ImageResponse(
     (
