@@ -40,10 +40,10 @@ export default function Navbar() {
 
               {/* Desktop Navigation */}
               <div className="hidden md:flex gap-6">
-                  <NavLink href="/" label="THE_FEED" />
-                  <NavLink href="/analysis/feed" label="BRAIN_DUMP" highlight/>
-                  <NavLink href="/bridge" label="WORMHOLE"  />
-                  <NavLink href="/profile" label="STASH" />
+                  <NavLink href="/" label="MARKETS" />
+                  <NavLink href="/analysis/feed" label="ANALYSIS" highlight/>
+                  <NavLink href="/bridge" label="BRIDGE"  />
+                  <NavLink href="/profile" label="MY BETS" />
               </div>
           </div>
 
@@ -79,10 +79,10 @@ export default function Navbar() {
         ${isMobileMenuOpen ? 'translate-y-0' : '-translate-y-full'}
       `}>
          <div className="flex flex-col gap-4 text-lg mt-4">
-            <MobileNavLink href="/" label="THE_FEED" />
-            <MobileNavLink href="/analysis/feed" label="BRAIN_DUMP" highlight/>
-            <MobileNavLink href="/bridge" label="WORMHOLE"  />
-            <MobileNavLink href="/profile" label="STASH" />
+            <MobileNavLink href="/" label="MARKETS" />
+            <MobileNavLink href="/analysis/feed" label="ANALYSIS" highlight/>
+            <MobileNavLink href="/bridge" label="BRIDGE"  />
+            <MobileNavLink href="/profile" label="MY BETS" />
          </div>
 
          {/* Wallet Header moved here. Replaces System Status */}
