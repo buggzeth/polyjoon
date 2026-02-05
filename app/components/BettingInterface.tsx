@@ -11,6 +11,81 @@ interface BettingInterfaceProps {
   recommendedPrice: number;
 }
 
+// Helper to parse Polymarket CLOB errors
+const parseError = (err: any): string => {
+  let rawMsg = "";
+
+  // A. Handle direct CLOB failure object { error: "...", status: 400 }
+  if (err?.error && typeof err.error === "string") {
+    rawMsg = err.error;
+  }
+  // B. Handle Axios/Network response structure
+  else if (err?.response?.data) {
+    const d = err.response.data;
+    if (typeof d === "string") rawMsg = d;
+    else if (d.error) rawMsg = d.error;
+    else rawMsg = JSON.stringify(d);
+  }
+  // C. Handle standard Error object
+  else if (err?.message) {
+    rawMsg = err.message;
+  }
+  // D. Fallback
+  else {
+    rawMsg = typeof err === "string" ? err : JSON.stringify(err);
+  }
+
+  const text = String(rawMsg);
+
+  // E. Handle escaped JSON strings often returned by the library
+  // e.g. [CLOB Client] request error "{\"status\":400, \"data\": {...}}"
+  if (text.includes('{"') || text.includes("{\"")) {
+    try {
+      // 1. Attempt to find the JSON object part
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start !== -1 && end > start) {
+        let jsonStr = text.substring(start, end + 1);
+        
+        // 2. Fix escaped quotes if strictly necessary (simple heuristic)
+        if (jsonStr.includes('\\"')) {
+           jsonStr = jsonStr.replace(/\\"/g, '"');
+        }
+        
+        const parsed = JSON.parse(jsonStr);
+        // 3. Extract inner error message
+        if (parsed.data?.error) return parseError(parsed.data.error); 
+        if (parsed.error) return parseError(parsed.error);
+      }
+    } catch (e) {
+      // Parsing failed, continue with original text
+    }
+  }
+
+  // F. User-Friendly Mapping based on Documentation & Logs
+  const lower = text.toLowerCase();
+
+  // "invalid amount ... min size: $1"
+  if (lower.includes("min size")) {
+      const match = text.match(/min size:? \$?([0-9.]+)/i);
+      if (match && match[1]) return `Order Too Small: Min $${match[1]}`;
+      return "Order Too Small: Below market minimum.";
+  }
+
+  if (lower.includes("tick size")) return "Invalid Price: Adjust to valid tick increment.";
+  if (lower.includes("balance") || lower.includes("allowance")) return "Insufficient Balance or Allowance.";
+  if (lower.includes("expiration")) return "Invalid Expiration Time.";
+  if (lower.includes("post-only")) return "Post-Only Failed: Order crosses book.";
+  if (lower.includes("fok") || lower.includes("fill")) return "Fill-or-Kill Failed: Low liquidity.";
+  if (lower.includes("market not ready")) return "Market Paused.";
+  if (lower.includes("duplicated")) return "Duplicate Order.";
+
+  // G. Truncate lengthy unknown errors
+  const cleanMsg = text.replace(/[\\"{}]/g, '').trim();
+  return cleanMsg.length > 60 ? cleanMsg.substring(0, 60) + "..." : cleanMsg;
+};
+
+
 export default function BettingInterface({ marketId, recommendedOutcome, recommendedPrice }: BettingInterfaceProps) {
   const { clobClient, isReady } = useTrading();
   
@@ -27,7 +102,6 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // 1. Resolve Token ID on Mount
-  // We need this ID to fetch live prices for the "Market" tab
   useEffect(() => {
     let mounted = true;
     const resolveToken = async () => {
@@ -36,7 +110,6 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
         const data = await tokenRes.json();
         if (mounted && data.tokenId) {
           setTokenId(data.tokenId);
-          // Optional: Auto-fetch price once token is resolved if in market mode
           if (orderType === "MARKET") fetchLivePrice(data.tokenId, mode);
         }
       } catch (e) {
@@ -58,21 +131,11 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
       let bestPrice = "0";
 
       if (side === "BUY") {
-        // Buying? We take from ASKS.
-        // Sort Ascending (Lowest Price First) -> We want the cheapest seller.
         const sortedAsks = [...(book.asks || [])].sort((a: any, b: any) => Number(a.price) - Number(b.price));
-        
-        if (sortedAsks.length > 0) {
-          bestPrice = sortedAsks[0].price;
-        }
+        if (sortedAsks.length > 0) bestPrice = sortedAsks[0].price;
       } else {
-        // Selling? We hit the BIDS.
-        // Sort Descending (Highest Price First) -> We want the highest bidder.
         const sortedBids = [...(book.bids || [])].sort((a: any, b: any) => Number(b.price) - Number(a.price));
-        
-        if (sortedBids.length > 0) {
-          bestPrice = sortedBids[0].price;
-        }
+        if (sortedBids.length > 0) bestPrice = sortedBids[0].price;
       }
 
       if (Number(bestPrice) > 0) {
@@ -87,18 +150,17 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
     }
   };
 
-  // Trigger refresh when clicking the button
   const handleRefreshClick = () => {
     if (tokenId) fetchLivePrice(tokenId, mode);
   };
 
-  // Re-fetch price if user switches Buy/Sell mode while in Market tab
   useEffect(() => {
     if (tokenId && orderType === "MARKET") {
       fetchLivePrice(tokenId, mode);
     }
   }, [mode, orderType]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const estCost = (Number(price) * Number(shares)).toFixed(2);
 
   const handleTrade = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -118,7 +180,6 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
     setMsg("");
 
     try {
-      // Execute Trade
       const res = await clobClient.createAndPostOrder({
         tokenID: tokenId,
         price: Number(price),
@@ -126,17 +187,30 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
         side: mode === "BUY" ? Side.BUY : Side.SELL,
       });
 
-      if (res.success) {
+      if (res && res.success) {
         setStatus("SUCCESS");
         setMsg(`Order Placed! ID: ${res.orderId?.slice(0,8)}...`);
       } else {
+        // --- LOG ERROR STRUCTURE ---
+        console.group("❌ CLOB Order Failed");
+        console.error("Full Response Object:", res);
+        console.groupEnd();
+        // ---------------------------
+        
         setStatus("ERROR");
-        setMsg(res.errorMsg || "Order Failed");
+        setMsg(parseError(res));
       }
     } catch (err: any) {
-      console.error(err);
+      // --- LOG EXCEPTION STRUCTURE ---
+      console.group("❌ CLOB Exception Caught");
+      console.error("Error Message:", err.message);
+      console.error("Raw Error:", err);
+      if (err.response) console.error("Axios Response:", err.response.data);
+      console.groupEnd();
+      // ------------------------------
+
       setStatus("ERROR");
-      setMsg(err.message || "Trade failed");
+      setMsg(parseError(err));
     }
   };
 
@@ -149,8 +223,6 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
       </div>
     );
   }
-
-  const estCost = (Number(price) * Number(shares)).toFixed(2);
 
   return (
     <form onSubmit={handleTrade} className="bg-zinc-950 rounded-sm p-4 border border-orange-900/20 mt-4">
@@ -200,7 +272,7 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
 
         <div className="grid grid-cols-2 gap-3">
           
-          {/* Price Input with Logic */}
+          {/* Price Input */}
           <div className="relative">
             <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">
               Price ($)
@@ -208,13 +280,12 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
             
             <div className="relative">
               <input 
-                type="number" step="0.01" max="1" min="0" value={price} onChange={(e) => setPrice(e.target.value)}
+                type="number" step="any" max="1" min="0" value={price} onChange={(e) => setPrice(e.target.value)}
                 className={`w-full bg-zinc-900 border rounded p-2 text-sm font-mono text-white focus:border-indigo-500 outline-none
                   ${orderType === "MARKET" ? "border-indigo-500/50 pr-8" : "border-slate-700"}
                 `}
               />
               
-              {/* Refresh Button (Only for Market Tab) */}
               {orderType === "MARKET" && (
                 <button
                   type="button"
@@ -248,7 +319,7 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
           <div>
             <label className="block text-[10px] text-slate-500 uppercase font-bold mb-1">Shares</label>
             <input 
-              type="number" step="1" min="1" value={shares} onChange={(e) => setShares(e.target.value)}
+              type="number" step="any" min="0" value={shares} onChange={(e) => setShares(e.target.value)}
               className="w-full bg-zinc-900 border border-slate-700 rounded p-2 text-sm font-mono text-white focus:border-indigo-500 outline-none"
             />
           </div>
@@ -284,8 +355,8 @@ export default function BettingInterface({ marketId, recommendedOutcome, recomme
         </button>
 
         {status === "ERROR" && (
-          <div className="text-[10px] text-rose-400 text-center bg-rose-900/20 p-2 rounded border border-rose-900/50">
-            Error: {msg}
+          <div className="text-[10px] text-rose-400 text-center bg-rose-900/20 p-2 rounded border border-rose-900/50 mt-2">
+            ⚠️ {msg}
           </div>
         )}
       </div>

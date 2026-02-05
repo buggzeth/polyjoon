@@ -19,7 +19,7 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
   const router = useRouter();
   const { transferUSDC, isReady } = useTrading();
 
-  // 1. Initial Click: Check DB, Redirect or Open Modal
+  // 1. Initial Click: Attempt Free Trial first
   const handleAnalyzeClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -27,24 +27,39 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
     setChecking(true);
     
     try {
-      // Check DB lazily
+      // Step A: Check if DB has it already (Free & Fast)
       const alreadyAnalyzed = await checkAnalysisExists(event.id);
 
       if (alreadyAnalyzed) {
-        // Free path
         router.push(`/analysis/result?eventId=${event.id}`);
-      } else {
-        // Paid path - Open Modal
-        setIsModalOpen(true);
+        return;
       }
+
+      // Step B: Attempt a FREE generation (Trial Mode)
+      // We call analyzeEvent without a txHash. 
+      // The server will check the cookie/IP.
+      const result = await analyzeEvent(event, false);
+
+      if (result.error === "TRIAL_EXHAUSTED") {
+        // Step C: Trial used up? Open Payment Modal.
+        setIsModalOpen(true);
+      } else if (result.error) {
+        // Actual error (API down, etc)
+        alert("Analysis failed: " + result.error);
+      } else {
+        // Success (Free Trial Used)
+        router.push(`/analysis/result?eventId=${event.id}`);
+      }
+
     } catch (error) {
       console.error(error);
+      alert("Something went wrong connecting to the agent.");
     } finally {
       setChecking(false);
     }
   };
 
-  // 2. Modal Confirm: Pay & Execute
+  // 2. Modal Confirm: Pay & Execute (Bypass Trial Check)
   const handlePaymentAndGenerate = async () => {
     if (!isReady) {
         alert("Please connect your wallet and 'Enable Trading' to proceed.");
@@ -56,20 +71,23 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
 
     try {
         // A. Transfer
-        await transferUSDC(ANALYSIS_COST_USDC);
+        const txHash = await transferUSDC(ANALYSIS_COST_USDC);
 
-        // B. Generate (force=false is safe as we know it's missing)
-        await analyzeEvent(event, false);
+        // B. Generate (Passing txHash to bypass trial check)
+        const result = await analyzeEvent(event, false, txHash);
+
+        if (result.error) {
+            throw new Error(result.error);
+        }
 
         // C. Redirect
         router.push(`/analysis/result?eventId=${event.id}`);
         
-        // Note: We don't close modal here immediately to prevent UI flash before nav
     } catch (error: any) {
         console.error("Payment flow error:", error);
         alert(error.message || "Transaction failed");
         setIsPaying(false);
-        setIsModalOpen(false); // Close on error
+        setIsModalOpen(false); 
     }
   };
 
@@ -104,8 +122,8 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
             onConfirm={handlePaymentAndGenerate}
             isProcessing={isPaying}
             amount={ANALYSIS_COST_USDC}
-            title="Unlock AI Analysis"
-            description="This market has not been analyzed yet. Generate a fresh, deep-dive report including EV calculations and buy signals."
+            title="Trial Exhausted"
+            description="You have used your free analysis. Deploy the agent again to generate a fresh deep-dive report including EV calculations."
         />
     </>
   );

@@ -27,7 +27,7 @@ export default function Navbar() {
                       alt="Nuke Farm Logo" 
                       fill 
                       className="object-contain"
-                      sizes="32px"
+                      sizes="128px"
                     />
                   </div>
                   

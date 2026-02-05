@@ -2,15 +2,19 @@
 "use server";
 
 import { GoogleGenAI } from "@google/genai";
+import { cookies, headers } from "next/headers"; // NEW
 import { PolymarketEvent } from "../types/polymarket";
 import { AnalysisResponse, BetOpportunity } from "../types/ai";
 import { saveAnalysisToDB, getLatestAnalysis } from "./storage";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 
+const TRIAL_COOKIE_NAME = "nuke_trial_used";
+
 export async function analyzeEvent(
   event: PolymarketEvent, 
-  force: boolean = false
+  force: boolean = false,
+  paymentTx?: string // NEW: Optional Payment Proof
 ): Promise<{ data: AnalysisResponse; isNew: boolean; error?: string }> {
   
   // 1. CACHE CHECK: If not forcing, return existing DB record if available
@@ -26,7 +30,30 @@ export async function analyzeEvent(
     }
   }
 
-  // 2. COOLDOWN CHECK: If forcing, ensure 30 minutes have passed since last run
+  // 2. TRIAL & PAYMENT ENFORCEMENT
+  const cookieStore = await cookies();
+  const trialUsed = cookieStore.get(TRIAL_COOKIE_NAME);
+  
+  // If this is NOT a paid request (no tx hash), enforce trial rules
+  if (!paymentTx) {
+    
+    // A. Check Cookie
+    if (trialUsed) {
+      return {
+        data: { summary: "", opportunities: [], sources: [] },
+        isNew: false,
+        error: "TRIAL_EXHAUSTED" // Specific error code for frontend
+      };
+    }
+
+    // B. (Optional) Check IP - Basic Implementation
+    const headersList = await headers();
+    const ip = headersList.get('x-forwarded-for') || 'unknown';
+    console.log(`🕵️ Analyzing request from IP: ${ip} (Trial Mode)`);
+    // Note: In production, you would check this IP against a Redis/DB blacklist here.
+  }
+
+  // 3. COOLDOWN CHECK: If forcing (regenerating), ensure 30 minutes have passed
   if (force) {
     const existing = await getLatestAnalysis(event.id);
     if (existing) {
@@ -34,7 +61,9 @@ export async function analyzeEvent(
       const now = new Date().getTime();
       const diffMinutes = (now - lastRun) / (1000 * 60);
 
-      if (diffMinutes < 30) {
+      // We allow bypass of cooldown if user paid again (paymentTx present)
+      // Otherwise enforce cooldown to prevent spam
+      if (diffMinutes < 30 && !paymentTx) {
         const remaining = Math.ceil(30 - diffMinutes);
         return { 
           data: existing.analysis_data, 
@@ -47,7 +76,7 @@ export async function analyzeEvent(
 
   console.log(`🤖 Generating fresh AI Analysis for ${event.title}...`);
 
-  // 3. Minify Market Data (Expanded to include Resolution Criteria & Stats)
+  // 4. Minify Market Data (Expanded to include Resolution Criteria & Stats)
   const marketContext = event.markets
     // FILTER: Only include markets that are Active AND Not Closed
     .filter(m => m.active && !m.closed)
@@ -76,7 +105,7 @@ export async function analyzeEvent(
     })
     .filter(Boolean);
 
-  // 4. Define Schema (Original Logic)
+  // 5. Define Schema (Original Logic)
   const analysisSchema = {
     type: "object",
     properties: {
@@ -151,7 +180,7 @@ export async function analyzeEvent(
       },
     });
 
-    // 5. Parse Response
+    // 6. Parse Response
     const text = response.text;
     if (!text) throw new Error("No response text generated");
     
@@ -166,7 +195,7 @@ export async function analyzeEvent(
       });
     }
 
-    // 6. Map to Types
+    // 7. Map to Types
     const safeOpportunities: BetOpportunity[] = (parsed.opportunities || []).map((op: any) => ({
       headline: op.headline || "Opportunity",
       selectedMarketId: op.selectedMarketId || "",
@@ -187,8 +216,19 @@ export async function analyzeEvent(
       sources: explicitSources
     };
 
-    // 7. SAVE TO DB
+    // 8. SAVE TO DB
     await saveAnalysisToDB(event.id, finalData);
+
+    // 9. SET TRIAL COOKIE (If this was a free run)
+    if (!paymentTx) {
+      cookieStore.set(TRIAL_COOKIE_NAME, "true", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        maxAge: 60 * 60 * 24 * 365 * 10, // 10 Years
+        path: "/",
+        sameSite: "lax"
+      });
+    }
 
     return {
       data: finalData,

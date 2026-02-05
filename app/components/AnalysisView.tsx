@@ -10,9 +10,9 @@ import BettingInterface from "./BettingInterface";
 import PaymentModal from "./PaymentModal";
 import { analyzeEvent } from "../actions/ai";
 import { getEventById } from "../actions/fetchEvents";
-import { fetchClobData, resolveTokenIds } from "../actions/clob"; // Import new actions
-import { ClobData } from "../types/clob"; // Import new types
-import OrderBookWidget from "./OrderBookWidget"; // Import new widget
+import { fetchClobData, resolveTokenIds } from "../actions/clob"; 
+import { ClobData } from "../types/clob"; 
+import OrderBookWidget from "./OrderBookWidget"; 
 import { useTrading } from '../contexts/TradingContext';
 import { ANALYSIS_COST_USDC } from '../lib/constants';
 import CrabSpinner from "./CrabSpinner";
@@ -32,7 +32,7 @@ export default function AnalysisView({ eventId, initialHistory }: AnalysisViewPr
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // CLOB Data State
-  const [tokenMap, setTokenMap] = useState<Record<string, string>>({}); // "marketId-outcome" -> "tokenId"
+  const [tokenMap, setTokenMap] = useState<Record<string, string>>({}); 
   const [clobData, setClobData] = useState<ClobData | null>(null);
   const [loadingClob, setLoadingClob] = useState(false);
 
@@ -54,7 +54,6 @@ export default function AnalysisView({ eventId, initialHistory }: AnalysisViewPr
       const mapping = await resolveTokenIds(targets);
       setTokenMap(mapping);
       
-      // Immediately fetch CLOB data once we have tokens
       const tokenIds = Object.values(mapping);
       if (tokenIds.length > 0) {
         const liveData = await fetchClobData(tokenIds);
@@ -82,65 +81,20 @@ export default function AnalysisView({ eventId, initialHistory }: AnalysisViewPr
         return;
     }
 
-    setRegenerating(true); // Shows spinner in button
-    setShowPaymentModal(false); // Close modal, show loading in UI
+    setRegenerating(true); 
+    setShowPaymentModal(false); 
     setErrorMsg(null);
     
     try {
       // A. Pay
-      await transferUSDC(ANALYSIS_COST_USDC);
+      const txHash = await transferUSDC(ANALYSIS_COST_USDC);
 
       // B. Fetch & Analyze
       const rawEvent = await getEventById(eventId);
       if (!rawEvent) throw new Error("Could not fetch event data");
 
-      const result = await analyzeEvent(rawEvent, true); // force = true
-      
-      if (result.error) {
-        setErrorMsg(result.error);
-      } else if (result.isNew) {
-        router.refresh();
-        const newRecord: AnalysisRecord = {
-            id: "temp-" + Date.now(),
-            event_id: eventId,
-            analysis_data: result.data,
-            created_at: new Date().toISOString()
-        };
-        setHistory([newRecord, ...history]);
-        setSelectedId(newRecord.id);
-      } else {
-        setErrorMsg("Database returned existing record.");
-      }
-    } catch (e: any) {
-      console.error(e);
-      setErrorMsg(e.message || "Regeneration failed");
-    } finally {
-      setRegenerating(false);
-    }
-  };
-
-  // Handle Regeneration (Existing Logic)
-  const handleRegenerate = async () => {
-    if (!isReady) {
-        alert("Please enable trading in the wallet menu to pay for regeneration.");
-        return;
-    }
-
-    if (!confirm(`Regenerate fresh analysis for ${ANALYSIS_COST_USDC} USDC?`)) return;
-
-    setRegenerating(true);
-    setErrorMsg(null);
-    
-    try {
-      // 1. Process Payment
-      await transferUSDC(ANALYSIS_COST_USDC);
-
-      // 2. Fetch Event Data
-      const rawEvent = await getEventById(eventId);
-      if (!rawEvent) throw new Error("Could not fetch event data");
-
-      // 3. Generate Analysis (Force = true)
-      const result = await analyzeEvent(rawEvent, true);
+      // Pass txHash to bypass trial checks since we paid
+      const result = await analyzeEvent(rawEvent, true, txHash); 
       
       if (result.error) {
         setErrorMsg(result.error);
@@ -218,7 +172,7 @@ export default function AnalysisView({ eventId, initialHistory }: AnalysisViewPr
             isOpen={showPaymentModal}
             onClose={() => setShowPaymentModal(false)}
             onConfirm={handleRegenerateConfirm}
-            isProcessing={regenerating && showPaymentModal} // Only show processing in modal if modal is still open (rare case here logic-wise but safe)
+            isProcessing={regenerating && showPaymentModal} 
             amount={ANALYSIS_COST_USDC}
             title="Regenerate Analysis"
             description="Run a fresh analysis on this market using the latest live data and odds. This action incurs a standard fee."
@@ -274,21 +228,17 @@ export default function AnalysisView({ eventId, initialHistory }: AnalysisViewPr
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {data.opportunities.length > 0 ? (
             data.opportunities.map((opp, idx) => {
-                // Find specific CLOB data for this opportunity
                 const key = `${opp.selectedMarketId}-${opp.selectedOutcome}`;
                 const tokenId = tokenMap[key];
                 const book = tokenId && clobData?.books ? clobData.books[tokenId] : undefined;
                 const spread = tokenId && clobData?.spreads ? clobData.spreads[tokenId] : undefined;
                 const livePriceObj = tokenId && clobData?.prices ? clobData.prices[tokenId] : undefined;
 
-                // Determine best fill price based on recommendation
-                // If BUY: We buy from SELLERS (Ask price)
-                // If SELL: We sell to BUYERS (Bid price)
-                let suggestedFillPrice = opp.marketProbability; // fallback to AI data
+                let suggestedFillPrice = opp.marketProbability; 
                 if (livePriceObj) {
                     suggestedFillPrice = opp.recommendation === "BUY" 
-                        ? Number(livePriceObj.SELL || livePriceObj.BUY || 0) // We buy at the Sell price
-                        : Number(livePriceObj.BUY || 0); // We sell at the Buy price
+                        ? Number(livePriceObj.SELL || livePriceObj.BUY || 0) 
+                        : Number(livePriceObj.BUY || 0); 
                 }
 
                 return (
@@ -312,7 +262,6 @@ export default function AnalysisView({ eventId, initialHistory }: AnalysisViewPr
   );
 }
 
-// Updated Opportunity Card to accept and render OrderBook
 function OpportunityCard({ 
     data, 
     book, 
@@ -349,11 +298,9 @@ function OpportunityCard({
       
       <p className="text-xs text-zinc-400 font-mono border-l-2 border-slate-700 pl-3 mb-6 line-clamp-2">{data.marketQuestion}</p>
       
-      {/* Updated Stats Grid: 2x2 on mobile, 4x1 on desktop */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-6">
         <StatBox label="AI Prob" value={`${(data.aiProbability * 100).toFixed(1)}%`} />
         
-        {/* Historical/Snapshot Price */}
         <div className="p-2 rounded border text-center bg-orange-900/20/30 border-slate-700/30 opacity-75">
             <div className="text-[10px] uppercase text-slate-500 font-bold">Price (Then)</div>
             <div className="text-lg font-mono font-bold text-zinc-400">
@@ -361,13 +308,10 @@ function OpportunityCard({
             </div>
         </div>
 
-        {/* Live Price */}
         <StatBox label="Price (Now)" value={`${(livePrice * 100).toFixed(1)}¢`} highlight />
-        
         <StatBox label="Kelly Stake" value={`${data.betSizeUnits}u`} />
       </div>
 
-      {/* Order Book Widget */}
       <div className="mb-6">
         <OrderBookWidget book={book} spread={spread} side={data.recommendation} />
       </div>
@@ -385,7 +329,7 @@ function OpportunityCard({
         <BettingInterface 
             marketId={data.selectedMarketId}
             recommendedOutcome={data.selectedOutcome}
-            recommendedPrice={livePrice} // Pre-fill with LIVE price
+            recommendedPrice={livePrice} 
         />
       </div>
     </div>
