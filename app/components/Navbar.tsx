@@ -1,7 +1,7 @@
-// app/components/Navbar.tsx
 "use client";
 
 import Link from "next/link";
+import Image from "next/image"; 
 import { useState, useEffect } from "react";
 import WalletHeader from "./WalletHeader";
 import { usePathname } from "next/navigation";
@@ -20,8 +20,17 @@ export default function Navbar() {
           
           {/* Left: Logo */}
           <div className="flex items-center gap-8 shrink-0">
-              <Link href="/" className="flex items-center gap-2 group">
-                  <span className="text-2xl">🦀</span>
+              <Link href="/" className="flex items-center gap-3 group">
+                  <div className="relative w-16 h-16 transition-transform group-hover:rotate-12">
+                    <Image 
+                      src="/logo.png" 
+                      alt="Nuke Farm Logo" 
+                      fill 
+                      className="object-contain"
+                      sizes="32px"
+                    />
+                  </div>
+                  
                   <div className="flex flex-col">
                       <span className="text-xl font-black bg-gradient-to-r from-orange-500 to-red-600 bg-clip-text text-transparent tracking-tighter group-hover:animate-pulse">
                           NUKE.FARM
@@ -40,8 +49,10 @@ export default function Navbar() {
 
           {/* Right: Wallet & Mobile Toggle */}
           <div className="flex items-center gap-3 md:gap-4">
-              {/* Wallet Header */}
-              <WalletHeader />
+              {/* Wallet Header - Hidden on Mobile to prevent layout blowout */}
+              <div className="hidden md:block">
+                <WalletHeader />
+              </div>
 
               {/* Mobile Menu Button */}
               <button 
@@ -61,10 +72,7 @@ export default function Navbar() {
         </div>
       </nav>
 
-      {/* 
-          Mobile Menu Overlay - Placed OUTSIDE the <nav>.
-          z-40 ensures it sits just below the Navbar (z-50), creating a slide-out effect from under the header.
-      */}
+      {/* Mobile Menu Overlay */}
       <div className={`
         fixed inset-0 bg-zinc-950 z-40 transition-transform duration-300 ease-in-out pt-20 px-6
         md:hidden flex flex-col gap-6
@@ -77,12 +85,9 @@ export default function Navbar() {
             <MobileNavLink href="/profile" label="STASH" />
          </div>
 
-         <div className="mt-auto mb-10 p-4 border border-orange-900/20 rounded-sm bg-zinc-900/50">
-            <p className="text-xs text-slate-500 mb-2 font-mono uppercase">System Status</p>
-            <div className="flex items-center gap-2 text-sm text-lime-400">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                AI Agents Active
-            </div>
+         {/* Wallet Header moved here. Replaces System Status */}
+         <div className="mt-auto mb-10 w-full flex flex-col items-center justify-center p-6 border-t border-orange-900/20 bg-zinc-900/20 rounded-t-2xl">
+            <WalletHeader />
          </div>
       </div>
     </>
