@@ -4,8 +4,15 @@ import { ImageResponse } from 'next/og';
 export const runtime = 'edge';
 
 export async function GET(request: Request) {
+  // 1. Fetch the image manually to ensure we have the data
+  // Note: Using the absolute URL ensures it works, but ensure 'nuke.farm' 
+  // is accessible from where this function runs (e.g. Vercel).
+  const imageUrl = `https://nuke.farm/og-mascot.png`;
   
-  const characterImage = `https://nuke.farm/og-mascot.png`;
+  const imageBuffer = await fetch(imageUrl).then((res) => {
+      if (!res.ok) throw new Error('Failed to fetch image');
+      return res.arrayBuffer();
+  });
 
   return new ImageResponse(
     (
@@ -15,7 +22,7 @@ export async function GET(request: Request) {
           width: '100%',
           display: 'flex',
           flexDirection: 'row',
-          backgroundColor: '#09090b', // Zinc-950
+          backgroundColor: '#09090b',
           fontFamily: 'monospace',
         }}
       >
@@ -32,7 +39,7 @@ export async function GET(request: Request) {
           
           {/* Badge */}
           <div style={{
-            display: 'flex', // Explicit flex needed
+            display: 'flex',
             backgroundColor: '#ea580c',
             color: 'white',
             padding: '8px 20px',
@@ -48,7 +55,7 @@ export async function GET(request: Request) {
 
           {/* Title */}
           <div style={{
-            display: 'flex', // Explicit flex needed
+            display: 'flex',
             fontSize: 80,
             fontWeight: 900,
             color: 'white',
@@ -59,17 +66,16 @@ export async function GET(request: Request) {
             NUKE.FARM
           </div>
 
-          {/* Subtitle - FIXED: Added display: flex and flexWrap */}
+          {/* Subtitle */}
           <div style={{ 
             display: 'flex',
             flexWrap: 'wrap',
             fontSize: 32, 
             color: '#a1a1aa',
             lineHeight: 1.4,
-            alignItems: 'center', // Aligns the text and the span
+            alignItems: 'center',
           }}>
             Autonomous agents pinching 
-            {/* Added margin to span for spacing */}
             <span style={{ color: '#fdba74', marginLeft: '8px', marginRight: '8px' }}>alpha</span> 
             from prediction markets.
           </div>
@@ -98,9 +104,10 @@ export async function GET(request: Request) {
           }} />
 
           {/* Image */}
-          {/* Ensure 'public/og-mascot.png' exists, otherwise this will throw an error */}
+          {/* We cast imageBuffer to 'any' to satisfy TypeScript, 
+              as Satori accepts ArrayBuffer for src */}
           <img 
-            src={characterImage}
+            src={imageBuffer as any}
             width="400"
             height="400"
             style={{
