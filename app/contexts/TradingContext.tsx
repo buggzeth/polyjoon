@@ -8,9 +8,8 @@ import { RelayClient, OperationType } from '@polymarket/builder-relayer-client';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import { deriveSafe } from "@polymarket/builder-relayer-client/dist/builder/derive";
 import { getContractConfig } from "@polymarket/builder-relayer-client/dist/config";
-import { useAccount, useWalletClient } from 'wagmi';
+import { useAccount, useWalletClient, useSwitchChain } from 'wagmi';
 import { useEthersSigner } from '../hooks/useEthersSigner';
-import { useSwitchChain } from 'wagmi';
 import { POLYGON_CHAIN_ID, RELAYER_URL, CLOB_API_URL, USDC_E_ADDRESS, TREASURY_ADDRESS, USDC_DECIMALS } from '../lib/constants';
 import { checkAllApprovals, createApprovalTxs } from '../lib/approvals';
 
@@ -25,7 +24,7 @@ interface TradingContextType {
   sessionStep: SessionStep;
   error: string | null;
   initializeSession: () => Promise<void>;
-  logout: () => void; // New logout function
+  logout: () => void;
   transferUSDC: (amount: number) => Promise<string>;
 }
 
@@ -34,7 +33,7 @@ export const useTrading = () => useContext(TradingContext);
 
 export const TradingProvider = ({ children }: { children: React.ReactNode }) => {
   const { address, isConnected, chainId } = useAccount();
-  const { switchChainAsync } = useSwitchChain();
+  const { switchChain, switchChainAsync } = useSwitchChain();
   const { data: walletClient } = useWalletClient();
   const signer = useEthersSigner({ chainId: POLYGON_CHAIN_ID });
 
@@ -54,6 +53,16 @@ export const TradingProvider = ({ children }: { children: React.ReactNode }) => 
       return undefined;
     }
   }, [address]);
+
+  // --- 0. Auto-Switch Chain Effect ---
+  // This proactively switches the network as soon as the wallet connects
+  useEffect(() => {
+    if (isConnected && chainId && chainId !== POLYGON_CHAIN_ID) {
+        console.log(`Wrong network (${chainId}). Switching to Polygon...`);
+        // We use the non-async version here for the effect
+        switchChain({ chainId: POLYGON_CHAIN_ID });
+    }
+  }, [isConnected, chainId, switchChain]);
 
   // --- 1. Helper to setup Client with Creds ---
   const setupClientWithCreds = useCallback(async (creds: any, currentSafeAddress: string, currentSigner: any, currentWalletClient: any) => {
@@ -75,7 +84,6 @@ export const TradingProvider = ({ children }: { children: React.ReactNode }) => 
         builderConfig
       );
       
-      // Initialize Relayer as well just in case we need it for later ops
       const builderConfigRelayer = new BuilderConfig({
         remoteBuilderConfig: {
             url: typeof window !== 'undefined' ? `${window.location.origin}/api/polymarket/sign` : '',
@@ -92,10 +100,9 @@ export const TradingProvider = ({ children }: { children: React.ReactNode }) => 
   // --- 2. Auto-Login Effect ---
   useEffect(() => {
     const attemptAutoLogin = async () => {
-        // We need all wallet dependencies ready before restoring
         if (!isConnected || !address || !signer || !walletClient || !safeAddress) return;
-        
-        // Don't auto-login if already working or ready
+        if (chainId !== POLYGON_CHAIN_ID) return; // Don't try login if wrong chain
+
         if (isLoading || isReady) return;
 
         const storageKey = `polyai_session_${address}`;
@@ -103,20 +110,20 @@ export const TradingProvider = ({ children }: { children: React.ReactNode }) => 
 
         if (storedCreds) {
             try {
-                setSessionStep("checking"); // Brief loading state
+                setSessionStep("checking"); 
                 const creds = JSON.parse(storedCreds);
                 console.log("Found stored session, restoring...");
                 await setupClientWithCreds(creds, safeAddress, signer, walletClient);
             } catch (e) {
                 console.error("Failed to restore session", e);
-                localStorage.removeItem(storageKey); // Clear bad data
+                localStorage.removeItem(storageKey); 
                 setSessionStep("idle");
             }
         }
     };
 
     attemptAutoLogin();
-  }, [isConnected, address, signer, walletClient, safeAddress, setupClientWithCreds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isConnected, address, signer, walletClient, safeAddress, setupClientWithCreds, chainId]); 
 
 
   const initializeRelayer = useCallback(async () => {
@@ -138,23 +145,33 @@ export const TradingProvider = ({ children }: { children: React.ReactNode }) => 
     setSessionStep("checking");
 
     try {
-      if (!address || !walletClient) throw new Error("Wallet not connected");
+      // FIX: Check Address first
+      if (!address) throw new Error("Wallet not connected");
 
-      // 1. Chain Check
+      // FIX: Check Chain BEFORE checking walletClient
+      // If chain is wrong, walletClient is often undefined, causing the error in the original code
       if (chainId !== POLYGON_CHAIN_ID) {
         setSessionStep("idle");
         try {
             await switchChainAsync({ chainId: POLYGON_CHAIN_ID });
-            setError("Switched network. Please click 'Enable Trading' again.");
+            // Important: Return here. switching chain forces a re-render. 
+            // The user will click "Enable Trading" again once the chain is correct.
+            setError("Network switched. Please click 'Enable Trading' again.");
+            setIsLoading(false);
             return; 
         } catch (e) {
             throw new Error("Network switch failed");
         }
       }
 
+      // Now it is safe to check for walletClient
+      if (!walletClient) {
+        // If we are on the right chain but client is missing, wait a moment or fail
+        throw new Error("Wallet syncing... Please try again in a moment.");
+      }
+
       if (!signer) {
-        setError("Wallet syncing... Please click again.");
-        return;
+        throw new Error("Signer not ready. Please try again.");
       }
 
       // 2. Relayer & Safe
@@ -212,9 +229,12 @@ export const TradingProvider = ({ children }: { children: React.ReactNode }) => 
       setError(msg);
       setSessionStep("idle");
     } finally {
-      setIsLoading(false);
+      // Only unset loading if we didn't return early due to chain switch
+      if (chainId === POLYGON_CHAIN_ID) {
+          setIsLoading(false);
+      }
     }
-  }, [address, signer, safeAddress, chainId, switchChainAsync, initializeRelayer, walletClient, setupClientWithCreds]);
+  }, [address, walletClient, signer, safeAddress, chainId, switchChainAsync, initializeRelayer, setupClientWithCreds]);
 
   // --- 3. Logout Function ---
   const logout = useCallback(() => {
@@ -282,7 +302,7 @@ export const TradingProvider = ({ children }: { children: React.ReactNode }) => 
       error,
       initializeSession,
       logout,
-      transferUSDC // Exported
+      transferUSDC 
     }}>
       {children}
     </TradingContext.Provider>
