@@ -8,8 +8,9 @@ const BASE_URL = process.env.NEXT_PUBLIC_POLYMARKET_API_URL || "https://gamma-ap
 export async function fetchEvents(
   offset: number = 0, 
   limit: number = 20,
-  maxVolume?: number, // Existing
-  maxEndDate?: string // NEW: ISO Date String
+  maxVolume?: number,
+  maxEndDate?: string,
+  query?: string // <--- NEW PARAMETER
 ): Promise<PolymarketEvent[]> {
   
   // Base params
@@ -27,9 +28,15 @@ export async function fetchEvents(
     params.append("volume_max", maxVolume.toString());
   }
 
-  // NEW: Apply End Date Filter
+  // Apply End Date Filter
   if (maxEndDate) {
     params.append("end_date_max", maxEndDate);
+  }
+
+  // NEW: Apply Search Query
+  if (query && query.trim().length > 0) {
+    // The Gamma API usually accepts 'q' for keyword search
+    params.append("q", query.trim());
   }
 
   try {

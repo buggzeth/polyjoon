@@ -299,7 +299,7 @@ function OpportunityCard({
       <p className="text-xs text-zinc-400 font-mono border-l-2 border-slate-700 pl-3 mb-6 line-clamp-2">{data.marketQuestion}</p>
       
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-6">
-        <StatBox label="AI Prob" value={`${(data.aiProbability * 100).toFixed(1)}%`} />
+        <StatBox label="AI Prob" value={`${(data.aiProbability > 1 ? data.aiProbability : data.aiProbability * 100).toFixed(1)}%`} />
         
         <div className="p-2 rounded border text-center bg-orange-900/20/30 border-slate-700/30 opacity-75">
             <div className="text-[10px] uppercase text-slate-500 font-bold">Price (Then)</div>

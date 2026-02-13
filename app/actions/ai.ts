@@ -2,10 +2,11 @@
 "use server";
 
 import { GoogleGenAI } from "@google/genai";
-import { cookies, headers } from "next/headers"; // NEW
+import { cookies, headers } from "next/headers";
 import { PolymarketEvent } from "../types/polymarket";
 import { AnalysisResponse, BetOpportunity } from "../types/ai";
 import { saveAnalysisToDB, getLatestAnalysis } from "./storage";
+import { fetchClobData } from "./clob"; 
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 
@@ -14,10 +15,10 @@ const TRIAL_COOKIE_NAME = "nuke_trial_used";
 export async function analyzeEvent(
   event: PolymarketEvent, 
   force: boolean = false,
-  paymentTx?: string // NEW: Optional Payment Proof
+  paymentTx?: string
 ): Promise<{ data: AnalysisResponse; isNew: boolean; error?: string }> {
   
-  // 1. CACHE CHECK: If not forcing, return existing DB record if available
+  // 1. CACHE CHECK
   if (!force) {
     try {
       const existing = await getLatestAnalysis(event.id);
@@ -34,26 +35,20 @@ export async function analyzeEvent(
   const cookieStore = await cookies();
   const trialUsed = cookieStore.get(TRIAL_COOKIE_NAME);
   
-  // If this is NOT a paid request (no tx hash), enforce trial rules
   if (!paymentTx) {
-    
-    // A. Check Cookie
     if (trialUsed) {
       return {
         data: { summary: "", opportunities: [], sources: [] },
         isNew: false,
-        error: "TRIAL_EXHAUSTED" // Specific error code for frontend
+        error: "TRIAL_EXHAUSTED"
       };
     }
-
-    // B. (Optional) Check IP - Basic Implementation
     const headersList = await headers();
     const ip = headersList.get('x-forwarded-for') || 'unknown';
     console.log(`🕵️ Analyzing request from IP: ${ip} (Trial Mode)`);
-    // Note: In production, you would check this IP against a Redis/DB blacklist here.
   }
 
-  // 3. COOLDOWN CHECK: If forcing (regenerating), ensure 30 minutes have passed
+  // 3. COOLDOWN CHECK
   if (force) {
     const existing = await getLatestAnalysis(event.id);
     if (existing) {
@@ -61,14 +56,12 @@ export async function analyzeEvent(
       const now = new Date().getTime();
       const diffMinutes = (now - lastRun) / (1000 * 60);
 
-      // We allow bypass of cooldown if user paid again (paymentTx present)
-      // Otherwise enforce cooldown to prevent spam
       if (diffMinutes < 30 && !paymentTx) {
         const remaining = Math.ceil(30 - diffMinutes);
         return { 
           data: existing.analysis_data, 
           isNew: false, 
-          error: `Cooldown active. Please wait ${remaining} minutes before regenerating.` 
+          error: `Cooldown active. Wait ${remaining} mins or pay to bypass.` 
         };
       }
     }
@@ -76,63 +69,94 @@ export async function analyzeEvent(
 
   console.log(`🤖 Generating fresh AI Analysis for ${event.title}...`);
 
-  // 4. Minify Market Data (Expanded to include Resolution Criteria & Stats)
-  const marketContext = event.markets
-    // FILTER: Only include markets that are Active AND Not Closed
-    .filter(m => m.active && !m.closed)
-    .map(m => {
+  // --- STEP 4: PREPARE LIVE PRICE DATA (CLOB) ---
+  const allTokenIds: string[] = [];
+  const activeMarkets = event.markets.filter(m => m.active && !m.closed);
+  
+  activeMarkets.forEach(m => {
+    try {
+      if (m.clobTokenIds) {
+        const tokens = JSON.parse(m.clobTokenIds);
+        allTokenIds.push(...tokens);
+      }
+    } catch (e) {
+      console.error(`Error parsing token IDs for market ${m.id}`);
+    }
+  });
+
+  let livePrices: Record<string, number> = {};
+  if (allTokenIds.length > 0) {
+    try {
+      const clobData = await fetchClobData(allTokenIds);
+      
+      if (clobData && clobData.prices) {
+        Object.entries(clobData.prices).forEach(([tid, priceObj]) => {
+            livePrices[tid] = priceObj.SELL ? Number(priceObj.SELL) : 0;
+        });
+      }
+    } catch (e) {
+      console.error("Failed to fetch live CLOB data, falling back to cached prices.", e);
+    }
+  }
+
+  // --- STEP 5: BUILD CONTEXT ---
+  const marketContext = activeMarkets.map(m => {
       let outcomes: string[] = [];
-      let prices: number[] = [];
+      let cachedPrices: number[] = [];
+      let tokenIds: string[] = [];
+      
       try {
         outcomes = JSON.parse(m.outcomes);
-        prices = JSON.parse(m.outcomePrices).map(Number);
+        cachedPrices = JSON.parse(m.outcomePrices).map(Number);
+        tokenIds = m.clobTokenIds ? JSON.parse(m.clobTokenIds) : [];
       } catch (e) {
         return null;
       }
 
-      // We map the raw API fields to a context object for the AI
+      const priceString = outcomes.map((o, i) => {
+        const tid = tokenIds[i];
+        const isLive = tid && livePrices[tid] !== undefined && livePrices[tid] > 0;
+        const finalPrice = isLive ? livePrices[tid] : cachedPrices[i];
+        
+        return `${o}: ${finalPrice.toFixed(3)} ${isLive ? '(Live Orderbook)' : '(Cached)'}`; 
+      }).join(", ");
+
       return {
         id: m.id,
         question: m.question,
-        resolutionCriteria: m.description, // CRITICAL: The rules of the bet
-        endDate: m.endDate, // CRITICAL: Time horizon
-        prices: outcomes.map((o, i) => `${o}: ${prices[i]}`).join(", "),
-        liquidity: m.liquidity, // Helpful for viability
-        volume: m.volume, // Helpful for sentiment
-        // spread is not strictly typed in all Polymarket interfaces, so we check safely
-        spread: (m as any).spread || 0 
+        resolutionCriteria: m.description,
+        endDate: m.endDate,
+        currentPrices: priceString, 
+        liquidity: m.liquidity,
+        volume: m.volume,
       };
     })
     .filter(Boolean);
 
-  // 5. Define Schema (Original Logic)
   const analysisSchema = {
     type: "object",
     properties: {
-      summary: {
-        type: "string",
-        description: "A brief 2-sentence overview of the event sentiment."
-      },
+      summary: { type: "string" },
       opportunities: {
         type: "array",
         items: {
           type: "object",
           properties: {
-            headline: { type: "string", description: "Short punchy headline" },
-            selectedMarketId: { type: "string", description: "The ID of the chosen question" },
-            selectedOutcome: { type: "string", description: "e.g. 'Yes', 'No', 'Kansas'" },
-            marketQuestion: { type: "string", description: "The question text" },
-            aiProbability: { type: "number", description: "0.0 to 1.0" },
-            marketProbability: { type: "number", description: "The current market price 0.0 to 1.0" },
-            confidenceScore: { type: "number", description: "1 to 100" },
-            expectedValue: { type: "number", description: "EV percentage e.g. 0.15" },
+            headline: { type: "string" },
+            selectedMarketId: { type: "string" },
+            selectedOutcome: { type: "string" },
+            marketQuestion: { type: "string" },
+            aiProbability: { type: "number" },
+            marketProbability: { type: "number" },
+            confidenceScore: { type: "number" },
+            expectedValue: { type: "number" },
             recommendation: { 
               type: "string", 
-              enum: ["BUY", "SELL"],
-              description: "Action to take."
+              enum: ["BUY"], 
+              description: "Action is always BUY."
             },
-            betSizeUnits: { type: "number", description: "Kelly stake 0-5" },
-            reasoning: { type: "string", description: "Specific analysis for this bet" }
+            betSizeUnits: { type: "number" },
+            reasoning: { type: "string" }
           },
           required: [
             "headline", "selectedMarketId", "selectedOutcome", "marketQuestion",
@@ -145,28 +169,55 @@ export async function analyzeEvent(
     required: ["summary", "opportunities"]
   };
 
+  // --- STEP 6: THE UNIFIED PROMPT ---
   const prompt = `
-    ROLE: You are an elite Forecaster and Quantitative Trader.
+    ROLE: You are a Skeptical Hedge Fund Risk Manager and Superforecaster. 
+    Your goal is NOT to find the highest theoretical return, but to find the *most mispriced* probabilities based on *fresh*, *real-time* evidence.
+
+    CURRENT DATE: ${new Date().toISOString()}
+    *Critical: Use this date to disqualify any news or polls older than 48 hours unless they are the absolute latest available.*
+
+    TASK: Analyze the Event. Select top betting opportunities based on "Risk-Adjusted EV".
     
-    TASK: Analyze the provided Event and its associated Markets. 
-    Identify the TOP 6 (up to 6 if applicable) betting opportunities that offer positive Expected Value (EV).
-    
-    EVENT DETAILS:
+    EVENT CONTEXT:
     Title: "${event.title}"
     Description: "${event.description}"
     
-    AVAILABLE MARKETS:
+    MARKET DATA (LIVE EXECUTION PRICES):
     ${JSON.stringify(marketContext, null, 2)}
     
-    INSTRUCTIONS:
-    1. ANALYZE RULES: Carefully read the "resolutionCriteria" for each market. Look for specific conditions (e.g., "resolves to No if X happens") that strictly define the outcome.
-    2. RESEARCH: Use Google Search to find latest news, stats, and real-time data relative to these specific questions.
-    3. EVALUATE METRICS:
-       - Liquidity/Volume: Prioritize markets with higher liquidity. Be cautious of high EV plays on dead markets (low volume).
-       - Spread: Account for the spread in your EV calculation. High spreads reduce realizable profit.
-       - Time Horizon: Check "endDate". Consider the opportunity cost of locking up capital for long-duration bets.
-    4. COMPUTE EV: Compare your researched probability against the current market "prices". Look for mispricings.
-    5. SELECT: Return a list of the best plays. If there are no positive EV plays, return an empty opportunities list.
+    OPERATIONAL PRINCIPLES:
+    1. RESPECT THE MARKET: Assume current prices reflect all public information efficiently. The "Live Orderbook" prices are what we must pay to enter.
+    2. THE "NEWS GAP": Only recommend a bet if you find *recent* evidence (relative to Current Date) that contradicts the current price.
+    3. ACTION IS ALWAYS "BUY": 
+       - You are entering NEW positions. You cannot "Sell" shares you don't own.
+       - If you think "Yes" is overpriced (bad bet), you must recommend "BUY No".
+       - If you think "No" is overpriced, you must recommend "BUY Yes".
+    4. SKEPTICISM: 
+       - Avoid "Long Shots" (Price < 0.10) unless you have breaking news.
+       - Avoid "Sure Things" (Price > 0.90) as the upside is capped.
+    5. EV CALCULATION: 
+       - Calculate EV using the live price provided. 
+       - EV = (YourProb / LiveAskPrice) - 1. 
+       - If EV is negative or < 0.05, do not recommend.
+    6. LOGICAL CONSISTENCY (CRITICAL):
+       - You CAN recommend multiple opportunities per market, BUT they must fit a SINGLE coherent narrative.
+       - ACCEPTABLE: Cumulative/Nested bets. (Example: If you believe Bitcoin hits 120k, betting on "> 100k" AND "> 110k" is valid because they are consistent).
+       - PROHIBITED: Contradictory/Conflicting bets on mutually exclusive outcomes. (Example: Do NOT bet "14-16 Earthquakes" AND "17-19 Earthquakes". This is confusing. Pick the single specific range with the highest EV).
+       - If two mutually exclusive outcomes both look good, select ONLY the one with the best risk-adjusted return.
+
+    ANALYSIS STEPS:
+    1. READ RULES: Check "resolutionCriteria".
+    2. LIVE SEARCH: Search for the absolute latest status, polls, or data.
+    3. BASE RATE: Ask "How often does this usually happen?"
+    4. COMPUTE: Estimate true probability (0-100%).
+    5. CONSISTENCY CHECK: Ensure all recommendations for this event align with ONE version of the future. Remove contradictory bets.
+    6. SANITY CHECK: If your probability differs from Market Price by >20%, verify sources again.
+    
+    OUTPUT REQUIREMENTS:
+    - Return empty list if no confident opportunities exist.
+    - "confidenceScore" (1-100) based on source freshness.
+    - "marketProbability" must match the Live Price provided in context.
   `;
 
   try {
@@ -180,13 +231,12 @@ export async function analyzeEvent(
       },
     });
 
-    // 6. Parse Response
     const text = response.text;
     if (!text) throw new Error("No response text generated");
     
     const parsed = JSON.parse(text);
 
-    // Extract Sources from Grounding Metadata
+    // Explicit Sources Extraction
     const explicitSources: string[] = [];
     const candidate = response.candidates?.[0];
     if (candidate?.groundingMetadata?.groundingChunks) {
@@ -195,7 +245,6 @@ export async function analyzeEvent(
       });
     }
 
-    // 7. Map to Types
     const safeOpportunities: BetOpportunity[] = (parsed.opportunities || []).map((op: any) => ({
       headline: op.headline || "Opportunity",
       selectedMarketId: op.selectedMarketId || "",
@@ -205,7 +254,7 @@ export async function analyzeEvent(
       marketProbability: Number(op.marketProbability) || 0,
       confidenceScore: Number(op.confidenceScore) || 5,
       expectedValue: Number(op.expectedValue) || 0,
-      recommendation: op.recommendation === "SELL" ? "SELL" : "BUY",
+      recommendation: "BUY",
       betSizeUnits: Number(op.betSizeUnits) || 0,
       reasoning: op.reasoning || "No reasoning provided."
     }));
@@ -216,10 +265,8 @@ export async function analyzeEvent(
       sources: explicitSources
     };
 
-    // 8. SAVE TO DB
     await saveAnalysisToDB(event.id, finalData);
 
-    // 9. SET TRIAL COOKIE (If this was a free run)
     if (!paymentTx) {
       try {
         cookieStore.set(TRIAL_COOKIE_NAME, "true", {
@@ -230,27 +277,16 @@ export async function analyzeEvent(
           sameSite: "lax"
         });
       } catch (e) {
-        // Ignore cookie errors if the client has disconnected; 
-        // the analysis is saved in DB, which is what matters.
         console.warn("Client disconnected, could not set trial cookie.");
       }
     }
 
-    return {
-      data: finalData,
-      isNew: true
-    };
+    return { data: finalData, isNew: true };
 
   } catch (error) {
     console.error("AI Analysis Error:", error);
-    
-    // Fallback error object matching return signature
     return {
-      data: {
-        summary: "Analysis Failed",
-        opportunities: [],
-        sources: []
-      },
+      data: { summary: "Analysis Failed", opportunities: [], sources: [] },
       isNew: false,
       error: "AI Generation failed internally."
     };

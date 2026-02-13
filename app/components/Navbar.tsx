@@ -44,6 +44,7 @@ export default function Navbar() {
                   <NavLink href="/analysis/feed" label="ANALYSIS" highlight/>
                   <NavLink href="/bridge" label="BRIDGE"  />
                   <NavLink href="/profile" label="MY BETS" />
+                  <NavLink href="/demo/agent" label="LIVE AGENT" />
               </div>
           </div>
 
@@ -83,6 +84,7 @@ export default function Navbar() {
             <MobileNavLink href="/analysis/feed" label="ANALYSIS" highlight/>
             <MobileNavLink href="/bridge" label="BRIDGE"  />
             <MobileNavLink href="/profile" label="MY BETS" />
+            <MobileNavLink href="/demo/agent" label="LIVE AGENT" />
          </div>
 
          {/* Wallet Header moved here. Replaces System Status */}

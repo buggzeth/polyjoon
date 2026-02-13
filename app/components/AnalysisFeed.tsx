@@ -199,9 +199,6 @@ function AnalysisFeedItem({ record }: { record: AnalysisRecord }) {
       <div className="bg-zinc-950/50 border-b border-orange-900/20 p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
             <div className="flex items-center gap-2 mb-1">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-zinc-900 px-1.5 py-0.5 rounded border border-orange-900/20">
-                    Parent Event
-                </span>
                 <span className="text-[10px] text-slate-600 font-mono">
                     {date.toLocaleDateString()} • {date.toLocaleTimeString()}
                 </span>

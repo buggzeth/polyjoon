@@ -2,24 +2,43 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { PolymarketEvent } from "../types/polymarket";
 import { analyzeEvent } from "../actions/ai";
 import { checkAnalysisExists } from "../actions/storage";
 import { useTrading } from "../contexts/TradingContext";
 import { ANALYSIS_COST_USDC } from "../lib/constants";
 import PaymentModal from "./PaymentModal";
-import CrabSpinner from "./CrabSpinner";
+import AnalysisLoadingModal from "./AnalysisLoadingModal";
 
 export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
+  // Button State
   const [checking, setChecking] = useState(false);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isPaying, setIsPaying] = useState(false);
   
-  const router = useRouter();
+  // Payment Modal State
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [isPaying, setIsPaying] = useState(false);
+
+  // Analysis Loading/Result Modal State
+  const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
+  const [analysisStatus, setAnalysisStatus] = useState<'generating' | 'ready' | 'error'>('generating');
+  const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const { transferUSDC, isReady } = useTrading();
 
-  // 1. Initial Click: Attempt Free Trial first
+  // Helper to trigger the success state
+  const handleSuccess = (eventId: string) => {
+    setResultUrl(`/analysis/result?eventId=${eventId}`);
+    setAnalysisStatus('ready');
+  };
+
+  // Helper to trigger error state
+  const handleError = (msg: string) => {
+    setErrorMsg(msg);
+    setAnalysisStatus('error');
+  };
+
+  // 1. Initial Click: Check DB or Attempt Free Trial
   const handleAnalyzeClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -27,28 +46,35 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
     setChecking(true);
     
     try {
-      // Step A: Check if DB has it already (Free & Fast)
+      // Step A: Check if DB has it already (Fast)
       const alreadyAnalyzed = await checkAnalysisExists(event.id);
 
       if (alreadyAnalyzed) {
-        router.push(`/analysis/result?eventId=${event.id}`);
+        // If exists, show the "Ready" modal immediately
+        setChecking(false);
+        setAnalysisStatus('ready');
+        setResultUrl(`/analysis/result?eventId=${event.id}`);
+        setIsAnalysisModalOpen(true);
         return;
       }
 
       // Step B: Attempt a FREE generation (Trial Mode)
-      // We call analyzeEvent without a txHash. 
-      // The server will check the cookie/IP.
+      // Note: We don't show the modal yet, we check if trial is valid first
       const result = await analyzeEvent(event, false);
 
       if (result.error === "TRIAL_EXHAUSTED") {
         // Step C: Trial used up? Open Payment Modal.
-        setIsModalOpen(true);
+        setIsPaymentModalOpen(true);
       } else if (result.error) {
         // Actual error (API down, etc)
         alert("Analysis failed: " + result.error);
       } else {
-        // Success (Free Trial Used)
-        router.push(`/analysis/result?eventId=${event.id}`);
+        // Success (Free Trial Used) -> Show Ready Modal
+        setChecking(false);
+        setAnalysisStatus('ready');
+        setResultUrl(`/analysis/result?eventId=${event.id}`);
+        setIsAnalysisModalOpen(true);
+        return;
       }
 
     } catch (error) {
@@ -59,35 +85,44 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
     }
   };
 
-  // 2. Modal Confirm: Pay & Execute (Bypass Trial Check)
+  // 2. Modal Confirm: Pay -> Close Payment -> Open Loading -> Generate
   const handlePaymentAndGenerate = async () => {
     if (!isReady) {
         alert("Please connect your wallet and 'Enable Trading' to proceed.");
-        setIsModalOpen(false);
+        setIsPaymentModalOpen(false);
         return;
     }
 
     setIsPaying(true);
 
     try {
-        // A. Transfer
+        // A. Transfer Funds
         const txHash = await transferUSDC(ANALYSIS_COST_USDC);
 
-        // B. Generate (Passing txHash to bypass trial check)
+        // B. Payment Success: Close Payment Modal immediately
+        setIsPaying(false);
+        setIsPaymentModalOpen(false);
+
+        // C. Open Analysis Loading Modal
+        setAnalysisStatus('generating');
+        setErrorMsg(null);
+        setIsAnalysisModalOpen(true);
+
+        // D. Perform Analysis (Client-side wait)
         const result = await analyzeEvent(event, false, txHash);
 
         if (result.error) {
-            throw new Error(result.error);
+            handleError(result.error);
+        } else {
+            handleSuccess(event.id);
         }
-
-        // C. Redirect
-        router.push(`/analysis/result?eventId=${event.id}`);
         
     } catch (error: any) {
         console.error("Payment flow error:", error);
-        alert(error.message || "Transaction failed");
+        // If payment failed, stay on payment modal (or close it and alert)
         setIsPaying(false);
-        setIsModalOpen(false); 
+        setIsPaymentModalOpen(false); 
+        alert(error.message || "Transaction failed");
     }
   };
 
@@ -106,7 +141,7 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
         >
           {checking ? (
             <div className="flex items-center gap-3">
-                <span className="text-[10px]">SCANNING, DON'T CLOSE THIS PAGE</span>
+                <span className="text-[10px]">SCANNING...</span>
                 <div className="flex gap-1">
                    <span className="animate-bounce delay-0 text-lg">🦀</span>
                    <span className="animate-bounce delay-75 text-lg">🦀</span>
@@ -116,14 +151,24 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
           ) : "☢️ DEPLOY_AGENT"}
         </button>
 
+        {/* 1. Payment Modal */}
         <PaymentModal 
-            isOpen={isModalOpen}
-            onClose={() => setIsModalOpen(false)}
+            isOpen={isPaymentModalOpen}
+            onClose={() => setIsPaymentModalOpen(false)}
             onConfirm={handlePaymentAndGenerate}
             isProcessing={isPaying}
             amount={ANALYSIS_COST_USDC}
             title="Trial Exhausted"
             description="You have used your free analysis. Deploy the agent again to generate a fresh deep-dive report including EV calculations."
+        />
+
+        {/* 2. Analysis Loading / Result Modal */}
+        <AnalysisLoadingModal 
+            isOpen={isAnalysisModalOpen}
+            status={analysisStatus}
+            resultUrl={resultUrl}
+            errorMsg={errorMsg}
+            onClose={() => setIsAnalysisModalOpen(false)}
         />
     </>
   );

@@ -4,10 +4,10 @@
 import { useEffect, useState } from "react";
 import { useAccount } from "wagmi";
 import { getUserData } from "../actions/profile";
-import { getMarketMetadata } from "../actions/markets"; // Import the new helper
-import { Position, Activity } from "../types/data-api";
+import { getMarketMetadata } from "../actions/markets";
+import { Position, Activity, ClosedPosition } from "../types/data-api";
 import { OpenOrder } from "../types/clob";
-import { useTrading } from "../contexts/TradingContext"; // Import Trading Context
+import { useTrading } from "../contexts/TradingContext";
 import CrabSpinner from "./CrabSpinner";
 
 // Helper type for UI
@@ -18,7 +18,8 @@ interface EnrichedOrder extends OpenOrder {
 
 export default function ProfileView() {
   const { address, isConnected } = useAccount();
-  const { clobClient, isReady, initializeSession } = useTrading();
+  // Get safeAddress from context to fetch the correct data
+  const { clobClient, isReady, initializeSession, safeAddress } = useTrading();
   
   const [loadingData, setLoadingData] = useState(false);
   const [loadingOrders, setLoadingOrders] = useState(false);
@@ -26,34 +27,46 @@ export default function ProfileView() {
   // Data State
   const [positions, setPositions] = useState<Position[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
+  const [closedPositions, setClosedPositions] = useState<ClosedPosition[]>([]);
   const [orders, setOrders] = useState<EnrichedOrder[]>([]);
   const [portfolioValue, setPortfolioValue] = useState(0);
-  
+  const [hideDust, setHideDust] = useState(true); 
   const [activeTab, setActiveTab] = useState<"POSITIONS" | "ORDERS" | "ACTIVITY">("POSITIONS");
 
-  // 1. Fetch Public Profile Data (Positions/Activity)
+  // Determine the correct address to fetch data for (Safe > EOA)
+  const targetAddress = safeAddress || address;
+
+  // 1. Fetch Public Profile Data
   useEffect(() => {
-    if (isConnected && address) {
-      fetchPublicData(address);
+    if (isConnected && targetAddress) {
+      console.log(`[ProfileView] Fetching public data for: ${targetAddress}`);
+      fetchPublicData(targetAddress);
     }
-  }, [isConnected, address]);
+  }, [isConnected, targetAddress]);
 
   // 2. Fetch Private Open Orders (Requires CLOB Session)
   useEffect(() => {
     if (isReady && clobClient) {
       fetchOpenOrders();
     }
-  }, [isReady, clobClient, activeTab]); // Re-fetch when tab switches to orders
+  }, [isReady, clobClient, activeTab]);
 
   const fetchPublicData = async (addr: string) => {
     setLoadingData(true);
-    const data = await getUserData(addr);
-    if (data) {
-      setPositions(data.positions);
-      setActivity(data.activity);
-      setPortfolioValue(data.portfolioValue);
+    try {
+        const data = await getUserData(addr);
+        
+        if (data) {
+            setPositions(data.positions);
+            setActivity(data.activity);
+            setClosedPositions(data.closedPositions);
+            setPortfolioValue(data.portfolioValue);
+        }
+    } catch (e) {
+        console.error("[ProfileView] Error in fetchPublicData:", e);
+    } finally {
+        setLoadingData(false);
     }
-    setLoadingData(false);
   };
 
   const fetchOpenOrders = async () => {
@@ -63,20 +76,13 @@ export default function ProfileView() {
       const rawOrders = await clobClient.getOpenOrders({});
       
       const enriched = await Promise.all(rawOrders.map(async (order: any) => {
-        // 1. Resolve Title
-        // The API returns 'market' (Condition ID)
         const meta = await getMarketMetadata(order.market);
-        
-        // 2. Resolve Size safely
-        // Check size, current_size, or fall back to original_size
         const rawSize = order.size || order.current_size || order.original_size || "0";
-        
-        // 3. Resolve ID safely
         const safeId = order.id || order.orderID || "unknown";
 
         return {
           ...order,
-          id: safeId, // Ensure we normalize ID for the key/cancel function
+          id: safeId,
           size: rawSize,
           title: meta?.question || "Unknown Market",
           icon: meta?.icon || "",
@@ -86,7 +92,7 @@ export default function ProfileView() {
       
       setOrders(enriched);
     } catch (e) {
-      console.error("Failed to fetch open orders", e);
+      console.error("[ProfileView] Failed to fetch open orders", e);
     } finally {
       setLoadingOrders(false);
     }
@@ -95,20 +101,18 @@ export default function ProfileView() {
   const handleCancelOrder = async (orderId: string) => {
     if (!clobClient || !orderId) return;
     
-    // UI Feedback: Set loading state or optimistic delete
     const previousOrders = [...orders];
     setOrders(prev => prev.filter(o => o.id !== orderId));
 
     try {
       const res = await clobClient.cancelOrder({ orderID: orderId });
       
-      // If the API says it wasn't canceled, revert UI
       if (res && res.not_canceled && Object.keys(res.not_canceled).length > 0) {
         alert("Could not cancel order.");
         setOrders(previousOrders);
       }
     } catch (e) {
-      console.error("Cancel failed", e);
+      console.error("[ProfileView] Cancel failed", e);
       alert("Error cancelling order");
       setOrders(previousOrders);
     }
@@ -123,12 +127,18 @@ export default function ProfileView() {
     );
   }
 
+  // Calculate stats based on ALL positions (including 0 value ones) so PnL is accurate
   const totalPnl = positions.reduce((acc, p) => acc + p.cashPnl, 0);
   const isPositive = totalPnl >= 0;
 
+  // Filter for UI: Only show positions with value > 0 (filters out lost bets/dust)
+  const visiblePositions = hideDust 
+  ? positions.filter((p) => (p.currentValue || 0) > 0.001) 
+  : positions;
+
   return (
     <div className="max-w-6xl mx-auto">
-      {/* Header Stats (Same as before) */}
+      {/* Header Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div className="bg-zinc-900 border border-orange-900/20 p-6 rounded-sm">
           <div className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-1">Portfolio Value</div>
@@ -147,7 +157,6 @@ export default function ProfileView() {
         <div className="bg-zinc-900 border border-orange-900/20 p-6 rounded-sm flex items-center justify-between">
             <div>
                 <div className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-1">Open Orders</div>
-                {/* Show number of open orders */}
                 <div className="text-3xl font-mono font-bold text-orange-400">
                     {isReady ? orders.length : "-"}
                 </div>
@@ -185,7 +194,23 @@ export default function ProfileView() {
       {/* Content */}
       <div className="min-h-[400px]">
         {activeTab === "POSITIONS" && (
-            <PositionsTable positions={positions} loading={loadingData} />
+            <div className="space-y-4">
+                {/* NEW: Toggle Switch */}
+                {!loadingData && positions.length > 0 && (
+                    <div className="flex justify-end">
+                        <label className="flex items-center gap-2 text-xs font-bold text-slate-500 cursor-pointer select-none hover:text-orange-400 transition-colors">
+                            <input 
+                                type="checkbox" 
+                                checked={hideDust}
+                                onChange={(e) => setHideDust(e.target.checked)}
+                                className="w-4 h-4 rounded border-orange-900/40 bg-zinc-900 text-orange-600 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                            />
+                            HIDE DUST / LOST BETS
+                        </label>
+                    </div>
+                )}
+                <PositionsTable positions={visiblePositions} loading={loadingData} />
+            </div>
         )}
         
         {activeTab === "ORDERS" && (
@@ -199,7 +224,10 @@ export default function ProfileView() {
         )}
         
         {activeTab === "ACTIVITY" && (
-            <ActivityTable activities={activity} loading={loadingData} />
+            <div className="space-y-8">
+                <ActivityTable activities={activity} loading={loadingData} />
+                <ClosedPositionsTable positions={closedPositions} loading={loadingData} />
+            </div>
         )}
       </div>
     </div>
@@ -210,7 +238,7 @@ export default function ProfileView() {
 
 function PositionsTable({ positions, loading }: { positions: Position[], loading: boolean }) {
     if (loading) return <div className="py-12"><CrabSpinner text="DIGGING UP POSITIONS..." /></div>;
-    if (positions.length === 0) return <div className="text-slate-500 text-center py-10">No active positions found.</div>;
+    if (!positions || positions.length === 0) return <div className="text-slate-500 text-center py-10">No active positions found.</div>;
 
     return (
         <div className="overflow-x-auto bg-zinc-900/50 rounded-sm border border-orange-900/20">
@@ -287,7 +315,6 @@ function OrdersTable({
                 </thead>
                 <tbody className="text-sm">
                     {orders.map((order) => {
-                        // Safe number conversion
                         const sizeNum = parseFloat(order.size as string);
                         const priceNum = parseFloat(order.price);
 
@@ -334,33 +361,87 @@ function OrdersTable({
 
 function ActivityTable({ activities, loading }: { activities: Activity[], loading: boolean }) {
     if (loading) return <div className="py-12"><CrabSpinner text="TRACING HISTORY..." /></div>;
-    if (activities.length === 0) return <div className="text-slate-500 text-center py-10">No recent activity.</div>;
+    
+    // Don't show "No recent activity" if there are closed positions rendering below.
+    // Instead return empty div or null. 
+    // We will let the user see the Closed Positions section if this is empty.
+    if (!activities || activities.length === 0) {
+        return <div className="text-zinc-500 text-xs uppercase tracking-widest font-bold mb-4">On-Chain Activity: None</div>;
+    }
 
     return (
-        <div className="space-y-2">
-            {activities.map((act, i) => (
-                <div key={i} className="flex items-center justify-between bg-zinc-900/50 border border-orange-900/20 p-4 rounded-sm">
-                    <div className="flex items-center gap-4">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                            act.side === 'BUY' ? 'bg-lime-900/20 text-lime-400' : 'bg-rose-900/20 text-rose-400'
-                        }`}>
-                            {act.side === 'BUY' ? 'B' : 'S'}
+        <div>
+            <div className="text-zinc-500 text-xs uppercase tracking-widest font-bold mb-4">Recent Transactions</div>
+            <div className="space-y-2">
+                {activities.map((act, i) => (
+                    <div key={i} className="flex items-center justify-between bg-zinc-900/50 border border-orange-900/20 p-4 rounded-sm">
+                        <div className="flex items-center gap-4">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
+                                act.side === 'BUY' ? 'bg-lime-900/20 text-lime-400' : 'bg-rose-900/20 text-rose-400'
+                            }`}>
+                                {act.side === 'BUY' ? 'B' : 'S'}
+                            </div>
+                            <div>
+                                <div className="text-sm font-bold text-slate-200">{act.side} {act.outcome}</div>
+                                <div className="text-xs text-slate-500 truncate max-w-[200px]">{act.title}</div>
+                            </div>
                         </div>
-                        <div>
-                            <div className="text-sm font-bold text-slate-200">{act.side} {act.outcome}</div>
-                            <div className="text-xs text-slate-500 truncate max-w-[200px]">{act.title}</div>
+                        <div className="text-right">
+                            <div className="text-sm font-mono font-bold text-slate-200">
+                                {act.size.toFixed(0)} @ {(act.price * 100).toFixed(1)}¢
+                            </div>
+                            <div className="text-xs text-slate-500 font-mono">
+                                {new Date(act.timestamp * 1000).toLocaleDateString()}
+                            </div>
                         </div>
                     </div>
-                    <div className="text-right">
-                        <div className="text-sm font-mono font-bold text-slate-200">
-                            {act.size.toFixed(0)} @ {(act.price * 100).toFixed(1)}¢
-                        </div>
-                        <div className="text-xs text-slate-500 font-mono">
-                            {new Date(act.timestamp * 1000).toLocaleDateString()}
-                        </div>
-                    </div>
-                </div>
-            ))}
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function ClosedPositionsTable({ positions, loading }: { positions: ClosedPosition[], loading: boolean }) {
+    if (loading) return null;
+    if (!positions || positions.length === 0) return <div className="text-zinc-500 text-xs uppercase tracking-widest font-bold mb-4">Closed Positions: None</div>;
+
+    return (
+        <div>
+            <div className="text-zinc-500 text-xs uppercase tracking-widest font-bold mb-4 pt-4 border-t border-orange-900/20">History: Closed Positions</div>
+            <div className="overflow-x-auto bg-zinc-900/50 rounded-sm border border-orange-900/20">
+                <table className="w-full text-left border-collapse min-w-[600px]">
+                    <thead>
+                        <tr className="text-xs text-slate-500 border-b border-orange-900/20 uppercase tracking-wider">
+                            <th className="p-4 font-medium">Market</th>
+                            <th className="p-4 font-medium">Outcome</th>
+                            <th className="p-4 font-medium text-right">Total Bought</th>
+                            <th className="p-4 font-medium text-right">Avg Price</th>
+                            <th className="p-4 font-medium text-right">Realized PnL</th>
+                        </tr>
+                    </thead>
+                    <tbody className="text-sm">
+                        {positions.map((pos, idx) => {
+                            const pnlColor = pos.realizedPnl >= 0 ? "text-lime-400" : "text-rose-400";
+                            return (
+                                <tr key={idx} className="border-b border-orange-900/20/50 hover:bg-orange-900/20/30">
+                                    <td className="p-4">
+                                        <div className="flex items-center gap-3">
+                                            <img src={pos.icon} alt="" className="w-8 h-8 rounded bg-orange-900/20" />
+                                            <div className="max-w-[200px] truncate text-slate-200 font-medium">{pos.title}</div>
+                                        </div>
+                                    </td>
+                                    <td className="p-4"><Badge label={pos.outcome} /></td>
+                                    <td className="p-4 text-right font-mono text-slate-300">{pos.totalBought.toFixed(1)}</td>
+                                    <td className="p-4 text-right font-mono text-zinc-400">{(pos.avgPrice * 100).toFixed(1)}¢</td>
+                                    <td className={`p-4 text-right font-mono font-bold ${pnlColor}`}>
+                                        {pos.realizedPnl >= 0 ? '+' : ''}{pos.realizedPnl.toFixed(2)}
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
         </div>
     );
 }

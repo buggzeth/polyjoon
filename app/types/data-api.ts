@@ -41,6 +41,24 @@ export interface Activity {
   transactionHash: string;
 }
 
+export interface ClosedPosition {
+  proxyWallet: string;
+  asset: string;
+  conditionId: string;
+  avgPrice: number;
+  totalBought: number;
+  realizedPnl: number;
+  curPrice: number;
+  timestamp: number;
+  title: string;
+  slug: string;
+  icon: string;
+  eventSlug: string;
+  outcome: string;
+  outcomeIndex: number;
+  endDate: string;
+}
+
 export interface PortfolioValue {
   value: number; // Total portfolio value in USDC
   cash: number;  // (Derived if possible, otherwise we just show value)

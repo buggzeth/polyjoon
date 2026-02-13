@@ -17,26 +17,71 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
   const [offset, setOffset] = useState(initialEvents.length);
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  
+  // Storage State: Prevents initial render from overwriting LS with defaults
+  const [isStorageLoaded, setIsStorageLoaded] = useState(false);
 
   // --- FILTERS ---
   // Volume Filter (Default 5M)
   const [volumeCap, setVolumeCap] = useState<number>(5000000); 
-  const [debouncedVolumeCap, setDebouncedVolumeCap] = useState<number>(5000000);
-
-  // Date Filter (Default 365 days - essentially "View All")
+  // Date Filter (Default 365 days)
   const [daysCap, setDaysCap] = useState<number>(365);
+  // Search Filter
+  const [searchQuery, setSearchQuery] = useState<string>("");
+
+  // Debounced Values
+  const [debouncedVolumeCap, setDebouncedVolumeCap] = useState<number>(5000000);
   const [debouncedDaysCap, setDebouncedDaysCap] = useState<number>(365);
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>("");
 
   const loaderRef = useRef<HTMLDivElement>(null);
 
-  // 1. Handle Debounce (Combine both filters)
+  // 1. Load from LocalStorage on Mount
+  useEffect(() => {
+    const loadSettings = () => {
+      try {
+        const savedVol = localStorage.getItem("nuke_vol");
+        const savedDays = localStorage.getItem("nuke_days");
+        const savedQuery = localStorage.getItem("nuke_query");
+
+        if (savedVol) {
+          setVolumeCap(Number(savedVol));
+          setDebouncedVolumeCap(Number(savedVol));
+        }
+        if (savedDays) {
+          setDaysCap(Number(savedDays));
+          setDebouncedDaysCap(Number(savedDays));
+        }
+        if (savedQuery) {
+          setSearchQuery(savedQuery);
+          setDebouncedSearchQuery(savedQuery);
+        }
+      } catch (e) {
+        console.error("Failed to load settings", e);
+      } finally {
+        setIsStorageLoaded(true);
+      }
+    };
+    loadSettings();
+  }, []);
+
+  // 2. Save to LocalStorage when filters change
+  useEffect(() => {
+    if (!isStorageLoaded) return;
+    localStorage.setItem("nuke_vol", volumeCap.toString());
+    localStorage.setItem("nuke_days", daysCap.toString());
+    localStorage.setItem("nuke_query", searchQuery);
+  }, [volumeCap, daysCap, searchQuery, isStorageLoaded]);
+
+  // 3. Handle Debounce (Combine all filters)
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedVolumeCap(volumeCap);
       setDebouncedDaysCap(daysCap);
+      setDebouncedSearchQuery(searchQuery);
     }, 500);
     return () => clearTimeout(timer);
-  }, [volumeCap, daysCap]);
+  }, [volumeCap, daysCap, searchQuery]);
 
   // Helper: Get ISO Date string for N days from now
   const getIsoDate = (days: number) => {
@@ -45,10 +90,19 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
     return date.toISOString();
   };
 
-  // 2. Refetch when Filters Change
+  // 4. Refetch when Filters Change
   useEffect(() => {
-    // Don't re-fetch on first render if defaults match initial
-    if (debouncedVolumeCap === 5000000 && debouncedDaysCap === 365 && events === initialEvents) return;
+    // Prevent fetching until storage is checked to avoid UI flicker/double fetch
+    if (!isStorageLoaded) return;
+
+    // Optimization: If it's the very first render and values match initial props/empty state, 
+    // use the server-passed initialEvents to save a fetch.
+    if (
+      debouncedVolumeCap === 5000000 && 
+      debouncedDaysCap === 365 && 
+      debouncedSearchQuery === "" &&
+      events === initialEvents
+    ) return;
 
     const resetFeed = async () => {
       setIsLoading(true);
@@ -58,8 +112,14 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
       try {
         const endDateStr = getIsoDate(debouncedDaysCap);
         
-        // Pass both volume and end date filters
-        const newEvents = await fetchEvents(0, 20, debouncedVolumeCap, endDateStr);
+        // Pass all filters including search query
+        const newEvents = await fetchEvents(
+          0, 
+          20, 
+          debouncedVolumeCap, 
+          endDateStr,
+          debouncedSearchQuery
+        );
         setEvents(newEvents);
         setOffset(20);
       } catch (e) {
@@ -71,10 +131,12 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
 
     resetFeed();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedVolumeCap, debouncedDaysCap]);
+  }, [debouncedVolumeCap, debouncedDaysCap, debouncedSearchQuery, isStorageLoaded]);
 
-  // 3. Infinite Scroll
+  // 5. Infinite Scroll
   useEffect(() => {
+    if (!isStorageLoaded) return;
+
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && !isLoading && hasMore) {
@@ -86,14 +148,20 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
 
     if (loaderRef.current) observer.observe(loaderRef.current);
     return () => observer.disconnect();
-  }, [isLoading, hasMore, offset, debouncedVolumeCap, debouncedDaysCap]);
+  }, [isLoading, hasMore, offset, debouncedVolumeCap, debouncedDaysCap, debouncedSearchQuery, isStorageLoaded]);
 
   const loadMore = async () => {
     setIsLoading(true);
     try {
       const endDateStr = getIsoDate(debouncedDaysCap);
 
-      const newEvents = await fetchEvents(offset, 20, debouncedVolumeCap, endDateStr);
+      const newEvents = await fetchEvents(
+        offset, 
+        20, 
+        debouncedVolumeCap, 
+        endDateStr,
+        debouncedSearchQuery
+      );
       
       if (newEvents.length === 0) {
         setHasMore(false);
@@ -125,13 +193,41 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
     return `${val} Days`;
   };
 
+  // Prevent rendering until we know the local storage state to avoid hydration mismatch/flicker
+  if (!isStorageLoaded) {
+    return <div className="min-h-[50vh] flex items-center justify-center"><CrabSpinner text="LOADING PREFERENCES..." /></div>;
+  }
+
   return (
     <div className="space-y-8">
       
-      {/* --- Filter Control Bar (Non-Sticky) --- */}
-      {/* Removed 'sticky top-4 z-20' */}
-      <div className="bg-zinc-900/80 border border-orange-900/20 p-6 rounded-sm backdrop-blur-md shadow-2xl">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      {/* --- Filter Control Bar --- */}
+      <div className="bg-zinc-900/80 border border-orange-900/20 p-6 rounded-sm backdrop-blur-md shadow-2xl space-y-8">
+        
+        {/* Search Bar */}
+        <div className="relative w-full group">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <span className="text-orange-600 font-mono font-bold animate-pulse">{'>'}</span>
+            </div>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="SEARCH PROTOCOLS [Trump, Crypto, NFL...]"
+              className="w-full bg-black/50 border border-orange-900/30 text-orange-50 font-mono text-sm rounded-sm py-3 pl-8 pr-10 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/20 placeholder-zinc-700 transition-all"
+            />
+            {searchQuery && (
+               <button 
+                 onClick={() => setSearchQuery("")}
+                 className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-600 hover:text-orange-500"
+               >
+                 <span className="text-[10px] uppercase font-bold tracking-wider">CLR</span>
+               </button>
+            )}
+        </div>
+
+        {/* Sliders Container */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 border-t border-orange-900/10 pt-6">
             
             {/* Volume Slider */}
             <div className="flex flex-col gap-4">
@@ -203,8 +299,12 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
         ))}
         
         {events.length === 0 && !isLoading && (
-            <div className="col-span-full py-20 text-center text-slate-500 border border-dashed border-orange-900/20 rounded-sm">
-                No markets found matching your filters.
+            <div className="col-span-full py-20 flex flex-col items-center justify-center text-center text-slate-500 border border-dashed border-orange-900/20 rounded-sm bg-zinc-900/30">
+                <span className="text-2xl mb-2">☢️</span>
+                <p className="font-mono text-sm">No markets found matching filters.</p>
+                {debouncedSearchQuery && (
+                  <p className="text-xs mt-2 text-orange-800">Query: "{debouncedSearchQuery}"</p>
+                )}
             </div>
         )}
       </div>
@@ -212,7 +312,7 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
       {/* --- Loader --- */}
       <div ref={loaderRef} className="flex justify-center py-10 w-full">
         {isLoading ? (
-          <CrabSpinner text="HUNTING FOR MARKETS..." size="sm" />
+          <CrabSpinner text={debouncedSearchQuery ? "SCANNING SECTOR..." : "HUNTING FOR MARKETS..."} size="sm" />
         ) : !hasMore && events.length > 0 ? (
           <div className="text-slate-600 text-sm font-mono border-t border-orange-900/10 pt-4">
             // END OF FEED
