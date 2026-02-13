@@ -35,7 +35,16 @@ export default function EventCard({ event }: EventCardProps) {
   const INITIAL_MARKETS_TO_SHOW = 3;
   const markets = event.markets || [];
 
+  const now = Date.now();
+
   const validMarkets = markets.filter((m) => {
+    // 1. Filter out expired markets
+    if (m.endDate) {
+      const marketEnd = new Date(m.endDate).getTime();
+      if (marketEnd <= now) return false;
+    }
+
+    // 2. Filter out malformed data
     try {
       if (!m.outcomes || !m.outcomePrices) return false;
       JSON.parse(m.outcomes);

@@ -71,7 +71,15 @@ export async function analyzeEvent(
 
   // --- STEP 4: PREPARE LIVE PRICE DATA (CLOB) ---
   const allTokenIds: string[] = [];
-  const activeMarkets = event.markets.filter(m => m.active && !m.closed);
+  const now = Date.now();
+
+  // Filter markets that are active, not closed, AND not expired based on date
+  const activeMarkets = event.markets.filter(m => {
+    const isClosedStatus = !m.active || m.closed;
+    const isExpiredDate = m.endDate ? new Date(m.endDate).getTime() <= now : true;
+    
+    return !isClosedStatus && !isExpiredDate;
+  });
   
   activeMarkets.forEach(m => {
     try {
