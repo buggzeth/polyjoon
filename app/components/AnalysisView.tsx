@@ -278,6 +278,15 @@ function OpportunityCard({
   const borderColor = isBuy ? "border-emerald-500/30 hover:border-emerald-500/60" : "border-slate-700 hover:border-slate-600";
   const glow = isBuy ? "shadow-[0_0_30px_-5px_rgba(16,185,129,0.1)]" : "";
 
+  // --- FIX START: NORMALIZE CENTS DISPLAY ---
+  // Ensures we don't multiply by 100 if the value is already > 1 (e.g. 19.0)
+  const formatCents = (val: number) => {
+    const num = Number(val);
+    // If num > 1, treat as whole cents (e.g. 19). If num <= 1, treat as decimal (0.19) and convert.
+    return (num > 1 ? num : num * 100).toFixed(1);
+  };
+  // --- FIX END ---
+
   return (
     <div className={`bg-zinc-900 border ${borderColor} rounded-2xl p-6 shadow-xl ${glow} transition-all flex flex-col h-full`}>
       {/* Header */}
@@ -299,16 +308,19 @@ function OpportunityCard({
       <p className="text-xs text-zinc-400 font-mono border-l-2 border-slate-700 pl-3 mb-6 line-clamp-2">{data.marketQuestion}</p>
       
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-6">
-        <StatBox label="AI Prob" value={`${(data.aiProbability > 1 ? data.aiProbability : data.aiProbability * 100).toFixed(1)}%`} />
+        {/* Uses formatCents for normalized display */}
+        <StatBox label="AI Prob" value={`${formatCents(data.aiProbability)}%`} />
         
         <div className="p-2 rounded border text-center bg-orange-900/20/30 border-slate-700/30 opacity-75">
             <div className="text-[10px] uppercase text-slate-500 font-bold">Price (Then)</div>
             <div className="text-lg font-mono font-bold text-zinc-400">
-                {(data.marketProbability * 100).toFixed(1)}¢
+                {/* Uses formatCents to avoid '1900.0¢' error */}
+                {formatCents(data.marketProbability)}¢
             </div>
         </div>
 
-        <StatBox label="Price (Now)" value={`${(livePrice * 100).toFixed(1)}¢`} highlight />
+        {/* Uses formatCents just in case livePrice falls back to unnormalized data */}
+        <StatBox label="Price (Now)" value={`${formatCents(livePrice)}¢`} highlight />
         <StatBox label="Kelly Stake" value={`${data.betSizeUnits}u`} />
       </div>
 
