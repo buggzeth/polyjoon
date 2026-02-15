@@ -33,7 +33,7 @@ export interface MockDashboardData {
 }
 
 export async function getMockDashboardData(): Promise<MockDashboardData> {
-  // 1. Fetch ALL Analysis History. The limit has been removed to ensure stats are all-time.
+  // 1. Fetch ALL Analysis History.
   const { data: records, error } = await supabaseAdmin
     .from('market_analysis')
     .select('*')
@@ -41,7 +41,7 @@ export async function getMockDashboardData(): Promise<MockDashboardData> {
 
   if (error || !records) return { stats: { totalTrades: 0, winRate: 0, totalPnL: 0, activeVolume: 0 }, positions: [] };
 
-  // 2. Extract all Market IDs to batch fetch current status
+  // 2. Extract all Market IDs
   const allMarketIds = new Set<string>();
   (records as AnalysisRecord[]).forEach(r => {
     r.analysis_data.opportunities.forEach(op => {
@@ -49,11 +49,10 @@ export async function getMockDashboardData(): Promise<MockDashboardData> {
     });
   });
 
-  // 3. Batch Fetch Market Data from Polymarket
+  // 3. Batch Fetch Market Data
   const marketIdsArray = Array.from(allMarketIds);
   const liveMarketsMap = new Map<string, any>();
   
-  // Fetch in chunks of 20 to avoid URL length limits
   for (let i = 0; i < marketIdsArray.length; i += 20) {
     const chunk = marketIdsArray.slice(i, i + 20);
     try {
@@ -72,49 +71,45 @@ export async function getMockDashboardData(): Promise<MockDashboardData> {
     record.analysis_data.opportunities.forEach((op) => {
       const liveMarket = liveMarketsMap.get(op.selectedMarketId);
       
-      // Determine Mock Stake ($100 * units)
       const stake = (op.betSizeUnits || 1) * 10; 
 
-      // Entry Price (from AI snapshot)
-      const entryPrice = op.marketProbability;
+      // --- FIX: NORMALIZE ENTRY PRICE ---
+      // If AI saved "55" (cents), convert to 0.55. If "0.55", keep as is.
+      let rawEntry = Number(op.marketProbability);
+      const entryPrice = rawEntry > 1 ? rawEntry / 100 : rawEntry;
+      // ----------------------------------
       
-      // Determine Status & Result
       let status: "OPEN" | "WON" | "LOST" = "OPEN";
-      let currentPrice = entryPrice; // Default to entry if unknown
+      let currentPrice = entryPrice; 
       let pnl = 0;
 
       if (liveMarket) {
-        // Parse current prices
         let outcomeIndex = -1;
         try {
           const outcomes = JSON.parse(liveMarket.outcomes);
-          // Simple match (Yes/No). 
           outcomeIndex = outcomes.findIndex((o: string) => o.toLowerCase() === op.selectedOutcome.toLowerCase());
           
           if (outcomeIndex !== -1) {
              const prices = JSON.parse(liveMarket.outcomePrices);
+             // Current prices from API are always decimal (0.xx)
              currentPrice = Number(prices[outcomeIndex]);
           }
-        } catch (e) { /* ignore parse errors */ }
+        } catch (e) { /* ignore */ }
 
-        // Check Resolution
         if (liveMarket.closed) {
-          // Heuristic: If price is > 0.95, it won. If < 0.05, it lost.
           if (currentPrice > 0.95) status = "WON";
           else status = "LOST";
         }
       }
 
-      // Calculate PnL
+      // Calculate PnL using the normalized prices
       if (status === "WON") {
-        // Profit = (Stake / Entry) - Stake
         const shares = stake / entryPrice;
-        const payout = shares * 1.00; // Redeems at $1
+        const payout = shares * 1.00; 
         pnl = payout - stake;
       } else if (status === "LOST") {
         pnl = -stake;
       } else {
-        // Unrealized PnL (Mark to Market)
         const shares = stake / entryPrice;
         const currentValue = shares * currentPrice;
         pnl = currentValue - stake;
@@ -133,12 +128,11 @@ export async function getMockDashboardData(): Promise<MockDashboardData> {
         status,
         pnl,
         marketId: op.selectedMarketId,
-        marketEndDate: liveMarket ? liveMarket.endDate : undefined // <--- POPULATED HERE
+        marketEndDate: liveMarket ? liveMarket.endDate : undefined
       });
     });
   });
 
-  // 5. Aggregate Stats
   const finishedTrades = positions.filter(p => p.status !== "OPEN");
   const wins = finishedTrades.filter(p => p.status === "WON").length;
   const totalPnL = positions.reduce((acc, curr) => acc + curr.pnl, 0);

@@ -18,60 +18,41 @@ function filterActiveEvents(events: PolymarketEvent[]): PolymarketEvent[] {
 
   return events
     .map((event) => {
-      // 1. Filter inner markets based on date and status
       const validMarkets = (event.markets || []).filter((market) => {
-        // Explicit closed check
         if (market.closed) return false;
-
-        // Date check: Market must expire in the future
         if (!market.endDate) return false; 
         const marketEnd = new Date(market.endDate).getTime();
-        
         return marketEnd > now;
       });
 
-      // Return a shallow copy of the event with only valid markets
-      return {
-        ...event,
-        markets: validMarkets,
-      };
+      return { ...event, markets: validMarkets };
     })
     .filter((event) => {
-      // 2. Filter the event wrapper
-      
-      // If no valid markets remain after step 1, hide the event
       if (event.markets.length === 0) return false;
-
-      // Event-level explicit closed check
       if (event.closed) return false;
-
-      // Event-level date check
-      // (Usually redundant if markets are open, but good for safety)
       if (event.endDate) {
         const eventEnd = new Date(event.endDate).getTime();
         if (eventEnd <= now) return false;
       }
-
       return true;
     });
 }
 
+// UPDATE: Added tagSlug optional parameter
 export async function fetchEvents(
   offset: number = 0, 
   limit: number = 20,
   maxVolume?: number,
   maxEndDate?: string,
-  query?: string
+  query?: string,
+  tagSlug?: string
 ): Promise<PolymarketEvent[]> {
   
   let data: PolymarketEvent[] = [];
 
-  // ---------------------------------------------------------
-  // MODE 1: SEARCH ACTIVE (Uses /public-search)
-  // ---------------------------------------------------------
+  // MODE 1: SEARCH
   if (query && query.trim().length > 0) {
     const page = Math.floor(offset / limit) + 1;
-
     const searchParams = new URLSearchParams({
       q: query.trim(),
       limit_per_type: limit.toString(),
@@ -86,32 +67,15 @@ export async function fetchEvents(
         cache: "no-store",
         headers: { "Accept": "application/json" },
       });
-
-      if (!res.ok) {
-        console.error(`Search API Error: ${res.status}`);
-        return [];
-      }
-
+      if (!res.ok) return [];
       const json = await res.json();
       data = json.events || [];
-
-      // Manual param filters (Search API doesn't support them)
-      if (maxVolume !== undefined && maxVolume !== null) {
-        data = data.filter(e => e.volume <= maxVolume);
-      }
-      if (maxEndDate) {
-        const maxDate = new Date(maxEndDate).getTime();
-        data = data.filter(e => e.endDate ? new Date(e.endDate).getTime() <= maxDate : true);
-      }
-
     } catch (error) {
       console.error("Search fetch error:", error);
       return [];
     }
   }
-  // ---------------------------------------------------------
-  // MODE 2: STANDARD FEED (Uses /events)
-  // ---------------------------------------------------------
+  // MODE 2: STANDARD FEED
   else {
     const params = new URLSearchParams({
       limit: limit.toString(),
@@ -122,20 +86,14 @@ export async function fetchEvents(
       ascending: "false",
     });
 
-    if (maxVolume !== undefined && maxVolume !== null) {
-      params.append("volume_max", maxVolume.toString());
-    }
-
-    if (maxEndDate) {
-      params.append("end_date_max", maxEndDate);
-    }
+    if (maxVolume !== undefined && maxVolume !== null) params.append("volume_max", maxVolume.toString());
+    if (maxEndDate) params.append("end_date_max", maxEndDate);
+    if (tagSlug) params.append("tag_slug", tagSlug);
 
     try {
       const res = await fetch(`${BASE_URL}/events?${params.toString()}`, {
-        cache: "no-store",
-        headers: {
-          "Accept": "application/json",
-        },
+        next: { revalidate: 60 },
+        headers: { "Accept": "application/json" },
       });
 
       if (!res.ok) {
@@ -150,10 +108,13 @@ export async function fetchEvents(
     }
   }
 
-  // ---------------------------------------------------------
-  // FINAL PASS: Strict Date & Market Validity Filtering
-  // ---------------------------------------------------------
   return filterActiveEvents(data);
+}
+
+// NEW HELPER: Specifically for the Curated Sections
+export async function fetchTopEventsByTag(tagSlug: string, limit: number = 3) {
+  // We use a high volume filter implicitly by sorting by volume in fetchEvents
+  return await fetchEvents(0, limit, undefined, undefined, undefined, tagSlug);
 }
 
 export async function getEventById(eventId: string): Promise<PolymarketEvent | null> {
