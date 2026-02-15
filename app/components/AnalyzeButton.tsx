@@ -16,6 +16,7 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
   
   // Payment Modal State
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentModalContent, setPaymentModalContent] = useState({ title: "", description: "" });
   const [isPaying, setIsPaying] = useState(false);
 
   // Analysis Loading/Result Modal State
@@ -26,19 +27,16 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
 
   const { transferUSDC, isReady } = useTrading();
 
-  // Helper to trigger the success state
   const handleSuccess = (eventId: string) => {
     setResultUrl(`/analysis/result?eventId=${eventId}`);
     setAnalysisStatus('ready');
   };
 
-  // Helper to trigger error state
   const handleError = (msg: string) => {
     setErrorMsg(msg);
     setAnalysisStatus('error');
   };
 
-  // 1. Initial Click: Check DB or Attempt Free Trial
   const handleAnalyzeClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -46,11 +44,9 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
     setChecking(true);
     
     try {
-      // Step A: Check if DB has it already (Fast)
       const alreadyAnalyzed = await checkAnalysisExists(event.id);
 
       if (alreadyAnalyzed) {
-        // If exists, show the "Ready" modal immediately
         setChecking(false);
         setAnalysisStatus('ready');
         setResultUrl(`/analysis/result?eventId=${event.id}`);
@@ -58,34 +54,44 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
         return;
       }
 
-      // Step B: Attempt a FREE generation (Trial Mode)
-      // Note: We don't show the modal yet, we check if trial is valid first
+      setIsAnalysisModalOpen(true);
+      setAnalysisStatus('generating');
+      setErrorMsg(null);
+
       const result = await analyzeEvent(event, false);
 
-      if (result.error === "TRIAL_EXHAUSTED") {
-        // Step C: Trial used up? Open Payment Modal.
+      // FIX: Handle both trial and daily limit errors by showing payment modal
+      if (result.error === "TRIAL_EXHAUSTED" || result.error === "DAILY_LIMIT_REACHED") {
+        setIsAnalysisModalOpen(false);
+        // Set context-specific text for the modal
+        if (result.error === "TRIAL_EXHAUSTED") {
+            setPaymentModalContent({
+                title: "Trial Exhausted",
+                description: "You have used your free analysis. Deploy the agent again to generate a fresh deep-dive report."
+            });
+        } else { // DAILY_LIMIT_REACHED
+             setPaymentModalContent({
+                title: "Daily Limit Reached",
+                description: "You've used your 5 free analyses for the day. You can purchase additional runs to continue."
+            });
+        }
         setIsPaymentModalOpen(true);
       } else if (result.error) {
-        // Actual error (API down, etc)
-        alert("Analysis failed: " + result.error);
+        handleError(result.error);
       } else {
-        // Success (Free Trial Used) -> Show Ready Modal
-        setChecking(false);
-        setAnalysisStatus('ready');
-        setResultUrl(`/analysis/result?eventId=${event.id}`);
-        setIsAnalysisModalOpen(true);
-        return;
+        window.dispatchEvent(new Event("trial_updated"));
+        handleSuccess(event.id);
       }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      alert("Something went wrong connecting to the agent.");
+      handleError(error.message || "Connection failed");
     } finally {
       setChecking(false);
     }
   };
 
-  // 2. Modal Confirm: Pay -> Close Payment -> Open Loading -> Generate
+  // handlePaymentAndGenerate is unchanged
   const handlePaymentAndGenerate = async () => {
     if (!isReady) {
         alert("Please connect your wallet and 'Enable Trading' to proceed.");
@@ -96,19 +102,15 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
     setIsPaying(true);
 
     try {
-        // A. Transfer Funds
         const txHash = await transferUSDC(ANALYSIS_COST_USDC);
-
-        // B. Payment Success: Close Payment Modal immediately
+        
         setIsPaying(false);
         setIsPaymentModalOpen(false);
 
-        // C. Open Analysis Loading Modal
         setAnalysisStatus('generating');
         setErrorMsg(null);
         setIsAnalysisModalOpen(true);
 
-        // D. Perform Analysis (Client-side wait)
         const result = await analyzeEvent(event, false, txHash);
 
         if (result.error) {
@@ -119,7 +121,6 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
         
     } catch (error: any) {
         console.error("Payment flow error:", error);
-        // If payment failed, stay on payment modal (or close it and alert)
         setIsPaying(false);
         setIsPaymentModalOpen(false); 
         alert(error.message || "Transaction failed");
@@ -151,18 +152,16 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
           ) : "☢️ DEPLOY_AGENT"}
         </button>
 
-        {/* 1. Payment Modal */}
         <PaymentModal 
             isOpen={isPaymentModalOpen}
             onClose={() => setIsPaymentModalOpen(false)}
             onConfirm={handlePaymentAndGenerate}
             isProcessing={isPaying}
             amount={ANALYSIS_COST_USDC}
-            title="Trial Exhausted"
-            description="You have used your free analysis. Deploy the agent again to generate a fresh deep-dive report including EV calculations."
+            title={paymentModalContent.title}
+            description={paymentModalContent.description}
         />
 
-        {/* 2. Analysis Loading / Result Modal */}
         <AnalysisLoadingModal 
             isOpen={isAnalysisModalOpen}
             status={analysisStatus}

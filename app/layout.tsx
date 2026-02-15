@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 import Navbar from "./components/Navbar";
+import CookieBanner from "./components/CookieBanner";
+import UserAuth from "./components/UserAuth";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -78,11 +80,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      {/* Added suppression for extension hydration issues common in web3 apps */}
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-zinc-950`}>
         <Providers>
-          <Navbar />
+          {/* Pass UserAuth as a prop */}
+          <Navbar userAuthSlot={<UserAuth />} />
           {children}
+          <CookieBanner />
         </Providers>
       </body>
     </html>

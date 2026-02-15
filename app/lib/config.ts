@@ -1,5 +1,4 @@
 // app/lib/config.ts
-// app/lib/config.ts
 import { http, createConfig } from 'wagmi'
 import { polygon } from 'wagmi/chains'
 import { injected, safe } from 'wagmi/connectors'

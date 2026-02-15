@@ -1,11 +1,14 @@
 // app/profile/page.tsx
 import ProfileView from "../components/ProfileView";
+import { auth } from "@/auth"; // Import auth
 
 export const metadata = {
   title: "My Portfolio | PolyAI Trader",
 };
 
-export default function ProfilePage() {
+export default async function ProfilePage() {
+  const session = await auth(); // Fetch user session on server
+
   return (
     <main className="min-h-screen bg-zinc-950 text-orange-50 p-4 md:p-8">
       <div className="max-w-6xl mx-auto mb-8">
@@ -17,7 +20,8 @@ export default function ProfilePage() {
         </p>
       </div>
       
-      <ProfileView />
+      {/* Pass session user to client component */}
+      <ProfileView user={session?.user} />
     </main>
   );
 }

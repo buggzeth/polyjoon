@@ -9,6 +9,7 @@ import { Position, Activity, ClosedPosition } from "../types/data-api";
 import { OpenOrder } from "../types/clob";
 import { useTrading } from "../contexts/TradingContext";
 import CrabSpinner from "./CrabSpinner";
+import { User } from "next-auth";
 
 // Helper type for UI
 interface EnrichedOrder extends OpenOrder {
@@ -16,7 +17,11 @@ interface EnrichedOrder extends OpenOrder {
   icon?: string;
 }
 
-export default function ProfileView() {
+interface ProfileViewProps {
+  user?: User; // Add user prop
+}
+
+export default function ProfileView({ user }: ProfileViewProps) {
   const { address, isConnected } = useAccount();
   // Get safeAddress from context to fetch the correct data
   const { clobClient, isReady, initializeSession, safeAddress } = useTrading();
@@ -138,6 +143,25 @@ export default function ProfileView() {
 
   return (
     <div className="max-w-6xl mx-auto">
+      
+      {/* NEW: Social Identity Card (Shows if logged in) */}
+      {user && (
+        <div className="mb-8 p-4 bg-zinc-900/40 border border-zinc-800 rounded-sm flex items-center gap-4">
+            {user.image && (
+                <img src={user.image} alt="User" className="w-12 h-12 rounded-full border-2 border-orange-900/50" />
+            )}
+            <div>
+                <div className="text-xs text-orange-500 font-bold uppercase tracking-widest">Operator Identity</div>
+                <div className="text-lg font-bold text-white">{user.name}</div>
+                <div className="text-xs text-zinc-500 font-mono">{user.email}</div>
+            </div>
+            <div className="ml-auto text-right hidden sm:block">
+                 <div className="inline-block px-2 py-1 bg-emerald-950/30 text-emerald-500 text-[10px] font-bold border border-emerald-900/50 rounded">
+                    AUTHENTICATED
+                 </div>
+            </div>
+        </div>
+      )}
       {/* Header Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div className="bg-zinc-900 border border-orange-900/20 p-6 rounded-sm">

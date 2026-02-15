@@ -3,14 +3,18 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { cookies, headers } from "next/headers";
+import { auth } from "@/auth"; // Import auth
 import { PolymarketEvent } from "../types/polymarket";
 import { AnalysisResponse, BetOpportunity } from "../types/ai";
-import { saveAnalysisToDB, getLatestAnalysis } from "./storage";
+import { saveAnalysisToDB, getLatestAnalysis, getUserDailyUsage } from "./storage";
 import { fetchClobData } from "./clob"; 
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 
-const TRIAL_COOKIE_NAME = "nuke_trial_used";
+const TRIAL_COOKIE_NAME = "nuke_last_free_gen";
+const USER_LIMIT_COOKIE = "nuke_user_usage"; // New cookie for UI
+const COOLDOWN_HOURS = 24;
+const USER_DAILY_LIMIT = 5;
 
 export async function analyzeEvent(
   event: PolymarketEvent, 
@@ -18,7 +22,10 @@ export async function analyzeEvent(
   paymentTx?: string
 ): Promise<{ data: AnalysisResponse; isNew: boolean; error?: string }> {
   
-  // 1. CACHE CHECK
+  const session = await auth();
+  const cookieStore = await cookies();
+
+  // 1. CACHE CHECK (Same as before)
   if (!force) {
     try {
       const existing = await getLatestAnalysis(event.id);
@@ -27,28 +34,47 @@ export async function analyzeEvent(
         return { data: existing.analysis_data, isNew: false };
       }
     } catch (e) {
-      console.warn("Database read failed, proceeding to generate fresh.", e);
+      console.warn("Database read failed", e);
     }
   }
 
   // 2. TRIAL & PAYMENT ENFORCEMENT
-  const cookieStore = await cookies();
-  const trialUsed = cookieStore.get(TRIAL_COOKIE_NAME);
-  
   if (!paymentTx) {
-    if (trialUsed) {
-      return {
-        data: { summary: "", opportunities: [], sources: [] },
-        isNew: false,
-        error: "TRIAL_EXHAUSTED"
-      };
+    
+    // BRANCH A: LOGGED IN USER (Limit 5)
+    if (session?.user?.id) {
+        const usageCount = await getUserDailyUsage(session.user.id);
+        
+        if (usageCount >= USER_DAILY_LIMIT) {
+             return {
+                data: { summary: "", opportunities: [], sources: [] },
+                isNew: false,
+                error: `DAILY_LIMIT_REACHED` // Frontend handles text (Buy more or wait)
+            };
+        }
+        console.log(`👤 User ${session.user.name} Usage: ${usageCount}/${USER_DAILY_LIMIT}`);
+    } 
+    // BRANCH B: GUEST (Limit 1 via Cookie)
+    else {
+        const lastGenCookie = cookieStore.get(TRIAL_COOKIE_NAME);
+        if (lastGenCookie) {
+            const lastGenTime = new Date(lastGenCookie.value).getTime();
+            const now = Date.now();
+            const hoursDiff = (now - lastGenTime) / (1000 * 60 * 60);
+
+            if (hoursDiff < COOLDOWN_HOURS) {
+                return {
+                    data: { summary: "", opportunities: [], sources: [] },
+                    isNew: false,
+                    error: `TRIAL_EXHAUSTED` 
+                };
+            }
+        }
+        console.log(`🕵️ Guest analyzing (Trial Mode)`);
     }
-    const headersList = await headers();
-    const ip = headersList.get('x-forwarded-for') || 'unknown';
-    console.log(`🕵️ Analyzing request from IP: ${ip} (Trial Mode)`);
   }
 
-  // 3. COOLDOWN CHECK
+  // 3. COOLDOWN CHECK (Per Event)
   if (force) {
     const existing = await getLatestAnalysis(event.id);
     if (existing) {
@@ -73,11 +99,9 @@ export async function analyzeEvent(
   const allTokenIds: string[] = [];
   const now = Date.now();
 
-  // Filter markets that are active, not closed, AND not expired based on date
   const activeMarkets = event.markets.filter(m => {
     const isClosedStatus = !m.active || m.closed;
     const isExpiredDate = m.endDate ? new Date(m.endDate).getTime() <= now : true;
-    
     return !isClosedStatus && !isExpiredDate;
   });
   
@@ -96,7 +120,6 @@ export async function analyzeEvent(
   if (allTokenIds.length > 0) {
     try {
       const clobData = await fetchClobData(allTokenIds);
-      
       if (clobData && clobData.prices) {
         Object.entries(clobData.prices).forEach(([tid, priceObj]) => {
             livePrices[tid] = priceObj.SELL ? Number(priceObj.SELL) : 0;
@@ -112,7 +135,6 @@ export async function analyzeEvent(
       let outcomes: string[] = [];
       let cachedPrices: number[] = [];
       let tokenIds: string[] = [];
-      
       try {
         outcomes = JSON.parse(m.outcomes);
         cachedPrices = JSON.parse(m.outcomePrices).map(Number);
@@ -125,7 +147,6 @@ export async function analyzeEvent(
         const tid = tokenIds[i];
         const isLive = tid && livePrices[tid] !== undefined && livePrices[tid] > 0;
         const finalPrice = isLive ? livePrices[tid] : cachedPrices[i];
-        
         return `${o}: ${finalPrice.toFixed(3)} ${isLive ? '(Live Orderbook)' : '(Cached)'}`; 
       }).join(", ");
 
@@ -138,8 +159,7 @@ export async function analyzeEvent(
         liquidity: m.liquidity,
         volume: m.volume,
       };
-    })
-    .filter(Boolean);
+    }).filter(Boolean);
 
   const analysisSchema = {
     type: "object",
@@ -273,20 +293,33 @@ export async function analyzeEvent(
       sources: explicitSources
     };
 
-    await saveAnalysisToDB(event.id, finalData);
+    // Save with User ID if available
+    await saveAnalysisToDB(event.id, finalData, session?.user?.id);
 
+    // POST-GENERATION COOKIE UPDATES
     if (!paymentTx) {
-      try {
-        cookieStore.set(TRIAL_COOKIE_NAME, "true", {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          maxAge: 60 * 60 * 24 * 365 * 10,
-          path: "/",
-          sameSite: "lax"
-        });
-      } catch (e) {
-        console.warn("Client disconnected, could not set trial cookie.");
-      }
+        // If Guest: Set timestamp
+        if (!session?.user) {
+            cookieStore.set(TRIAL_COOKIE_NAME, new Date().toISOString(), {
+                httpOnly: false,
+                secure: process.env.NODE_ENV === "production",
+                maxAge: 60 * 60 * 24 * 365,
+                path: "/",
+                sameSite: "lax"
+            });
+        } 
+        // If User: Set usage count for Client UI
+        else {
+             // We just did one, so fetch fresh count
+             const newCount = (await getUserDailyUsage(session.user.id!)); 
+             cookieStore.set(USER_LIMIT_COOKIE, newCount.toString(), {
+                httpOnly: false,
+                secure: process.env.NODE_ENV === "production",
+                maxAge: 60 * 60 * 24, // 24h
+                path: "/",
+                sameSite: "lax"
+            });
+        }
     }
 
     return { data: finalData, isNew: true };

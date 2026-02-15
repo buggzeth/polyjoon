@@ -1,22 +1,26 @@
 // app/providers.tsx
 "use client";
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useState, type ReactNode } from 'react'
-import { WagmiProvider } from 'wagmi'
-import { config } from './lib/config'
-import { TradingProvider } from './contexts/TradingContext'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useState, type ReactNode } from 'react';
+import { WagmiProvider } from 'wagmi';
+import { config } from './lib/config';
+import { TradingProvider } from './contexts/TradingContext';
+import { SessionProvider } from 'next-auth/react'; // <-- 1. IMPORT THIS
 
 export function Providers({ children }: { children: ReactNode }) {
-  const [queryClient] = useState(() => new QueryClient())
+  const [queryClient] = useState(() => new QueryClient());
 
   return (
-    <WagmiProvider config={config}>
-      <QueryClientProvider client={queryClient}>
-        <TradingProvider>
-          {children}
-        </TradingProvider>
-      </QueryClientProvider>
-    </WagmiProvider>
-  )
+    // 2. WRAP EVERYTHING WITH SessionProvider
+    <SessionProvider> 
+      <WagmiProvider config={config}>
+        <QueryClientProvider client={queryClient}>
+          <TradingProvider>
+            {children}
+          </TradingProvider>
+        </QueryClientProvider>
+      </WagmiProvider>
+    </SessionProvider>
+  );
 }

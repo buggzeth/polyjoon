@@ -1,11 +1,17 @@
 // app/demo/page.tsx
 import { getMockDashboardData } from "@/app/actions/mock";
+import { getLatestReport } from "@/app/actions/performance"; // New
 import MockTerminal from "@/app/components/MockTerminal";
+import PerformanceSection from "@/app/components/PerformanceSection"; // New
+
 
 export const dynamic = 'force-dynamic'; // Always fetch fresh stats
 
 export default async function DemoPage() {
-  const mockData = await getMockDashboardData();
+  const [mockData, reportStatus] = await Promise.all([
+    getMockDashboardData(),
+    getLatestReport()
+  ]);
 
   return (
     <main className="min-h-screen bg-black text-orange-50 p-4 md:p-8 font-mono bg-[url('/grid.svg')]">
@@ -35,11 +41,17 @@ export default async function DemoPage() {
             </div>
         </div>
 
+        <PerformanceSection 
+            initialReport={reportStatus.report}
+            canGenerate={reportStatus.canGenerate}
+            nextGenTime={reportStatus.nextGenTime}
+        />
+
         {/* The Dashboard */}
         <MockTerminal data={mockData} />
 
         <div className="mt-20 text-center text-zinc-700 text-xs font-mono">
-            // NUKE.FARM
+            NUKE.FARM
         </div>
       </div>
     </main>

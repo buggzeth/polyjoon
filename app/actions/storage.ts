@@ -6,18 +6,28 @@ import { AnalysisResponse } from "../types/ai";
 
 export interface AnalysisRecord {
   id: string;
-  event_id: string; // The parent event ID
+  event_id: string; 
+  user_id?: string; // Add this
   analysis_data: AnalysisResponse;
   created_at: string;
 }
 
-export async function saveAnalysisToDB(eventId: string, data: AnalysisResponse) {
+// Updated to accept userId
+export async function saveAnalysisToDB(eventId: string, data: AnalysisResponse, userId?: string) {
+  const payload: any = {
+    event_id: eventId,
+    analysis_data: data
+  };
+
+  // Only add user_id if the column exists in your DB schema. 
+  // Ideally, run: ALTER TABLE market_analysis ADD COLUMN user_id text;
+  if (userId) {
+    payload.user_id = userId;
+  }
+
   const { error } = await supabaseAdmin
     .from('market_analysis')
-    .insert({
-      event_id: eventId,
-      analysis_data: data
-    });
+    .insert(payload);
 
   if (error) console.error("DB Save Error:", error);
 }
@@ -61,6 +71,25 @@ export async function fetchAnalysisPage(offset: number = 0, limit: number = 20):
   }
 
   return data as AnalysisRecord[];
+}
+
+export async function getUserDailyUsage(userId: string): Promise<number> {
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  
+  const { count, error } = await supabaseAdmin
+    .from('market_analysis')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .gte('created_at', oneDayAgo);
+
+  if (error) {
+    console.error("Usage count error:", error);
+    // FIX: Fail OPEN instead of closed. If the DB check fails,
+    // let the user proceed. Don't block them.
+    return 0; 
+  }
+  
+  return count || 0;
 }
 
 export async function checkAnalysisExists(eventId: string): Promise<boolean> {
