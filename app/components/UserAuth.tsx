@@ -44,9 +44,9 @@ export default function UserAuth() {
         
         {/* AVATAR TRIGGER */}
         <div className="flex items-center gap-3">
-            <div className="hidden md:block text-right">
-                <div className="text-[10px] uppercase text-zinc-500 font-bold">Operator</div>
-                <div className="text-xs font-bold text-slate-200">{session.user.name?.split(' ')[0]}</div>
+            <div className="text-right">
+                <div className="text-[10px] uppercase text-zinc-500 font-bold">Welcome</div>
+                <div className="text-xs font-bold text-slate-200">{session.user.name}</div>
             </div>
             
             <button 
@@ -83,13 +83,10 @@ export default function UserAuth() {
                     className={`
                         z-50 bg-zinc-950 border border-zinc-800 shadow-2xl overflow-hidden flex flex-col
                         
-                        /* --- MOBILE: Fixed Center Modal --- */
                         fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 
                         w-[90%] max-w-sm rounded-2xl 
                         animate-in zoom-in-95 duration-200
 
-                        /* --- DESKTOP: Absolute Dropdown (FIX) --- */
-                        /* We must explicitly reset top/left/transform to override fixed centering */
                         md:absolute md:top-full md:right-0 md:left-auto md:translate-x-0 md:translate-y-0 
                         md:mt-4 md:w-72 md:max-w-none md:rounded-xl 
                         md:origin-top-right md:animate-in md:fade-in md:zoom-in-95

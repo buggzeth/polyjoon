@@ -1,30 +1,43 @@
 // app/components/MockTerminal.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { MockDashboardData, MockPosition } from "../actions/mock";
 
 interface MockTerminalProps {
   data: MockDashboardData;
 }
 
+const ITEMS_PER_PAGE = 10; // Number of executions to show per page/load
+
 export default function MockTerminal({ data }: MockTerminalProps) {
   const { stats, positions } = data;
+  const [page, setPage] = useState(1);
 
-  // Group positions by the analysis execution (recordId)
-  // This satisfies: "show each analysis as one item... with a dropdown"
-  const groupedExecutions = Object.values(positions.reduce((acc, pos) => {
-    if (!acc[pos.recordId]) {
-      acc[pos.recordId] = {
-        id: pos.recordId,
-        date: pos.createdAt,
-        items: []
-      };
-    }
-    acc[pos.recordId].items.push(pos);
-    return acc;
-  }, {} as Record<string, { id: string, date: string, items: MockPosition[] }>))
-  .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  // Group all positions by the analysis execution (recordId)
+  // useMemo ensures this expensive computation only runs when positions data changes
+  const allGroupedExecutions = useMemo(() => {
+    return Object.values(positions.reduce((acc, pos) => {
+      if (!acc[pos.recordId]) {
+        acc[pos.recordId] = {
+          id: pos.recordId,
+          date: pos.createdAt,
+          items: []
+        };
+      }
+      acc[pos.recordId].items.push(pos);
+      return acc;
+    }, {} as Record<string, { id: string, date: string, items: MockPosition[] }>))
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [positions]);
+
+  // Derive the visible list based on the current page
+  const visibleExecutions = useMemo(() => {
+    return allGroupedExecutions.slice(0, page * ITEMS_PER_PAGE);
+  }, [allGroupedExecutions, page]);
+
+  const hasMore = visibleExecutions.length < allGroupedExecutions.length;
+  const loadMore = () => setPage(p => p + 1);
 
   return (
     <div className="w-full space-y-6">
@@ -60,15 +73,27 @@ export default function MockTerminal({ data }: MockTerminalProps) {
 
       {/* 3. The List */}
       <div className="space-y-4">
-        {groupedExecutions.map((group) => (
+        {visibleExecutions.map((group) => (
             <ExecutionItem key={group.id} group={group} />
         ))}
-        {groupedExecutions.length === 0 && (
+        {allGroupedExecutions.length === 0 && (
             <div className="text-center py-20 text-zinc-600 font-mono">
                 NO AGENT ACTIVITY DETECTED.
             </div>
         )}
       </div>
+
+      {/* 4. Load More Button */}
+      {hasMore && (
+        <div className="text-center mt-8">
+            <button
+                onClick={loadMore}
+                className="font-mono text-xs uppercase bg-zinc-900 border border-zinc-700 text-zinc-400 px-6 py-2 rounded-sm hover:bg-zinc-800 hover:border-orange-500 hover:text-orange-500 transition-all"
+            >
+                Load More Executions
+            </button>
+        </div>
+      )}
 
     </div>
   );

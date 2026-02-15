@@ -33,12 +33,11 @@ export interface MockDashboardData {
 }
 
 export async function getMockDashboardData(): Promise<MockDashboardData> {
-  // 1. Fetch Analysis History (Limit 50 for demo speed)
+  // 1. Fetch ALL Analysis History. The limit has been removed to ensure stats are all-time.
   const { data: records, error } = await supabaseAdmin
     .from('market_analysis')
     .select('*')
-    .order('created_at', { ascending: false })
-    .limit(50);
+    .order('created_at', { ascending: false });
 
   if (error || !records) return { stats: { totalTrades: 0, winRate: 0, totalPnL: 0, activeVolume: 0 }, positions: [] };
 
