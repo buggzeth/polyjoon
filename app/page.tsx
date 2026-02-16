@@ -5,8 +5,6 @@ import CuratedZone from "./components/CuratedZone";
 
 export const dynamic = 'force-dynamic';
 
-export const maxDuration = 60;
-
 export default async function Home() {
   // Fetch the generic "All" feed for the bottom infinite scroll section
   const initialEvents = await fetchEvents(0, 20);
