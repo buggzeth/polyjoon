@@ -15,8 +15,8 @@ export default function UserAuth() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   
-  // Data Hook
-  const { remaining, limit, percent, nextRefillText } = useTrialLimit();
+  // Data Hook - Updated Destructuring
+  const { mode, credits, remaining, limit, percent, statusText } = useTrialLimit();
   
   // Click Outside Logic
   const menuRef = useRef<HTMLDivElement>(null);
@@ -36,6 +36,12 @@ export default function UserAuth() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Helper logic for display
+  const isCreditMode = mode === 'credits';
+  const displayLabel = isCreditMode ? "Credit Balance" : "Daily Fuel";
+  const displayValue = isCreditMode ? credits : `${remaining}/${limit}`;
+  const barColor = isCreditMode ? "bg-indigo-500" : (remaining === 0 ? "bg-red-500" : "bg-gradient-to-r from-orange-600 to-yellow-500");
 
   // 1. LOGGED IN STATE
   if (session?.user) {
@@ -75,7 +81,7 @@ export default function UserAuth() {
         {/* USER MENU (Dropdown/Modal) */}
         {isMenuOpen && (
             <>
-                {/* Mobile Backdrop (closes menu) */}
+                {/* Mobile Backdrop */}
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsMenuOpen(false)} />
 
                 <div 
@@ -107,29 +113,36 @@ export default function UserAuth() {
                     <div className="p-4 space-y-4">
                         <div className="space-y-2">
                             <div className="flex justify-between items-end">
-                                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Daily Fuel</span>
-                                <span className="text-xs font-mono font-bold text-orange-400">{remaining}/{limit}</span>
+                                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">{displayLabel}</span>
+                                <span className={`text-xs font-mono font-bold ${isCreditMode ? 'text-indigo-400' : 'text-orange-400'}`}>
+                                    {displayValue}
+                                </span>
                             </div>
                             
                             {/* Progress Bar */}
                             <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden">
                                 <div 
-                                    className={`h-full rounded-full transition-all duration-500 ${remaining === 0 ? "bg-red-500" : "bg-gradient-to-r from-orange-600 to-yellow-500"}`}
+                                    className={`h-full rounded-full transition-all duration-500 ${barColor}`}
                                     style={{ width: `${percent}%` }}
                                 />
                             </div>
                             <div className="text-[9px] text-zinc-600 text-right font-mono uppercase">
-                                <span className="text-zinc-400">{nextRefillText}</span>
+                                <span className="text-zinc-400">{statusText}</span>
                             </div>
                         </div>
 
                         <div className="p-3 bg-zinc-900 rounded border border-zinc-800/50">
                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-emerald-500 text-xs">●</span>
-                                <span className="text-xs font-bold text-zinc-300">Operator Tier</span>
+                                <span className={`text-xs ${isCreditMode ? "text-indigo-500" : "text-emerald-500"}`}>●</span>
+                                <span className="text-xs font-bold text-zinc-300">
+                                    {isCreditMode ? "Pro Operator" : "Standard Operator"}
+                                </span>
                              </div>
                              <p className="text-[10px] text-zinc-500 leading-relaxed">
-                                You have access to extended compute and 5 daily generations.
+                                {isCreditMode 
+                                    ? "You are using purchased credits for high-frequency analysis."
+                                    : "You are on the free daily tier. Upgrade to credits for unlimited runs."
+                                }
                              </p>
                         </div>
                     </div>
@@ -151,7 +164,7 @@ export default function UserAuth() {
             </>
         )}
 
-        {/* LOGOUT CONFIRMATION MODAL (Always Fixed Centered) */}
+        {/* LOGOUT CONFIRMATION MODAL */}
         {showLogoutConfirm && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-sm animate-in fade-in duration-200">
                 <div className="w-full max-w-xs bg-zinc-900 border border-red-900/50 shadow-2xl p-6 rounded-lg animate-in zoom-in-95 text-center">
@@ -186,7 +199,7 @@ export default function UserAuth() {
     );
   }
 
-  // 2. GUEST STATE (Login Button)
+  // 2. GUEST STATE
   return (
     <>
       <button 

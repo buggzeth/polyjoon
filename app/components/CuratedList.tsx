@@ -30,7 +30,7 @@ export default function CuratedList({ categories }: { categories: CategoryData[]
           icon={cat.icon} 
           events={cat.events} 
           // Only auto-expand the very first one if we are in compact mode
-          defaultOpen={index === 0 && !showAllSectors} 
+          defaultOpen={false} 
         />
       ))}
 

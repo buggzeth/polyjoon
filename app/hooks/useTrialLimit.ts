@@ -3,12 +3,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
-import { getUserSubscription } from "../actions/subscription"; // Ensure this action exists
-import { getUserDailyUsage } from "../actions/storage"; // Ensure this action exists
-import { SUBSCRIPTION_TIERS } from "../types/subscription";
+import { getUserDailyUsage, getUserCreditBalance } from "../actions/storage"; // Update imports
 
 const TRIAL_COOKIE_NAME = "nuke_last_free_gen";
-const COOLDOWN_HOURS = 24;
+const USER_DAILY_LIMIT = 5;
 
 export function useTrialLimit() {
   const { data: session } = useSession();
@@ -16,132 +14,80 @@ export function useTrialLimit() {
     limit: 1,
     used: 0,
     remaining: 0,
+    credits: 0,
     isAvailable: true,
-    nextRefillText: "",
+    statusText: "",
     percent: 0,
-    isSubscribed: false,
-    tierName: "Guest"
+    mode: "guest" as "guest" | "free_daily" | "credits"
   });
 
   const getCookie = (name: string) => {
     if (typeof document === 'undefined') return null;
     const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-    if (match) return decodeURIComponent(match[2]);
-    return null;
+    return match ? decodeURIComponent(match[2]) : null;
   };
 
   const calculate = useCallback(async () => {
-    // 1. LOGGED IN USER LOGIC
+    // 1. LOGGED IN USER
     if (session?.user?.id) {
         try {
-            // A. Check Subscription
-            const sub = await getUserSubscription(session.user.id);
-
-            if (sub && sub.isActive && sub.tier !== 'free') {
-                const tierConfig = SUBSCRIPTION_TIERS[sub.tier];
-                const limit = tierConfig.limit;
-                const used = sub.generation_count;
-                const remaining = Math.max(0, limit - used);
-                
-                // Format Date for refill text
-                const endDate = new Date(sub.end_date);
-                const refillText = `Refills ${endDate.toLocaleDateString()}`;
-
-                setData({
-                    limit,
-                    used,
-                    remaining,
-                    isAvailable: remaining > 0,
-                    nextRefillText: refillText,
-                    percent: (remaining / limit) * 100,
-                    isSubscribed: true,
-                    tierName: tierConfig.name
-                });
-                return;
-            }
-
-            // B. Free Tier (Daily Limit)
             const dailyUsed = await getUserDailyUsage(session.user.id);
-            const dailyLimit = 5;
-            const remaining = Math.max(0, dailyLimit - dailyUsed);
+            const credits = await getUserCreditBalance(session.user.id);
+            
+            const dailyRemaining = Math.max(0, USER_DAILY_LIMIT - dailyUsed);
 
-            setData({
-                limit: dailyLimit,
-                used: dailyUsed,
-                remaining,
-                isAvailable: remaining > 0,
-                nextRefillText: "Resets daily",
-                percent: (remaining / dailyLimit) * 100,
-                isSubscribed: false,
-                tierName: "Operator"
-            });
-
+            if (dailyRemaining > 0) {
+                // Show Daily Status
+                setData({
+                    limit: USER_DAILY_LIMIT,
+                    used: dailyUsed,
+                    remaining: dailyRemaining,
+                    credits,
+                    isAvailable: true,
+                    statusText: `${dailyRemaining} Daily Left`,
+                    percent: (dailyRemaining / USER_DAILY_LIMIT) * 100,
+                    mode: "free_daily"
+                });
+            } else {
+                // Show Credit Status
+                setData({
+                    limit: credits, 
+                    used: 0,
+                    remaining: credits,
+                    credits,
+                    isAvailable: credits > 0,
+                    statusText: `${credits} Credits`,
+                    percent: credits > 0 ? 100 : 0,
+                    mode: "credits"
+                });
+            }
         } catch (e) {
-            console.error("Error fetching usage stats", e);
+            console.error("Stats fetch error", e);
         }
         return;
     }
 
-    // 2. GUEST LOGIC (Cookie based)
-    const limit = 1;
+    // 2. GUEST (Cookie)
     const lastUsedTimestamp = getCookie(TRIAL_COOKIE_NAME);
-
+    // ... (Keep existing guest logic) ...
     if (!lastUsedTimestamp) {
-      setData({ 
-          limit, used: 0, remaining: 1, isAvailable: true, 
-          nextRefillText: "Ready", percent: 100, 
-          isSubscribed: false, tierName: "Guest" 
-      });
-      return;
+       setData({ limit: 1, used: 0, remaining: 1, credits: 0, isAvailable: true, statusText: "Guest Trial", percent: 100, mode: "guest" });
+       return;
     }
-
-    const lastDate = new Date(lastUsedTimestamp);
-    if (isNaN(lastDate.getTime())) {
-        setData({ 
-            limit, used: 0, remaining: 1, isAvailable: true, 
-            nextRefillText: "Ready", percent: 100,
-            isSubscribed: false, tierName: "Guest" 
-        });
-        return;
-    }
-
-    const now = new Date();
-    const diffMs = now.getTime() - lastDate.getTime();
-    const cooldownMs = COOLDOWN_HOURS * 60 * 60 * 1000;
-
-    if (diffMs < cooldownMs) {
-      const remainingMs = cooldownMs - diffMs;
-      const hours = Math.floor(remainingMs / (1000 * 60 * 60));
-      const mins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
-      
-      setData({
-        limit,
-        used: 1,
-        remaining: 0,
-        isAvailable: false,
-        nextRefillText: `${hours}h ${mins}m`,
-        percent: 0,
-        isSubscribed: false, 
-        tierName: "Guest"
-      });
+    const diff = Date.now() - new Date(lastUsedTimestamp).getTime();
+    const cooldown = 24 * 3600 * 1000;
+    
+    if (diff < cooldown) {
+        setData({ limit: 1, used: 1, remaining: 0, credits: 0, isAvailable: false, statusText: "Refills 24h", percent: 0, mode: "guest" });
     } else {
-      setData({ 
-          limit, used: 0, remaining: 1, isAvailable: true, 
-          nextRefillText: "Ready", percent: 100,
-          isSubscribed: false, tierName: "Guest" 
-      });
+        setData({ limit: 1, used: 0, remaining: 1, credits: 0, isAvailable: true, statusText: "Guest Trial", percent: 100, mode: "guest" });
     }
   }, [session]);
 
   useEffect(() => {
     calculate();
-    // Listen for custom event to trigger re-fetch after payment/generation
     window.addEventListener("trial_updated", calculate);
-    const interval = setInterval(calculate, 60000); // Check every minute
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("trial_updated", calculate);
-    };
+    return () => window.removeEventListener("trial_updated", calculate);
   }, [calculate]);
 
   return data;

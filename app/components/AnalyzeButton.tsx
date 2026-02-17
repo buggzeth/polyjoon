@@ -1,7 +1,7 @@
 // app/components/AnalyzeButton.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { PolymarketEvent } from "../types/polymarket";
 import { analyzeEvent } from "../actions/ai";
 import { checkAnalysisExists } from "../actions/storage";
@@ -10,7 +10,10 @@ import { ANALYSIS_COST_USDC } from "../lib/constants";
 import PaymentModal from "./PaymentModal";
 import AnalysisLoadingModal from "./AnalysisLoadingModal";
 
-export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
+export default function AnalyzeButton({ event, hasAnalysis = false }: { event: PolymarketEvent; hasAnalysis?: boolean }) {
+  // 1. Local state to track analysis status immediately (reacts to prop + local action)
+  const [isAnalyzed, setIsAnalyzed] = useState(hasAnalysis);
+
   // Button State
   const [checking, setChecking] = useState(false);
   
@@ -25,9 +28,15 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const { transferUSDC, isReady } = useTrading();
+  const { transferUSDC, isReady, initializeSession } = useTrading();
+
+  // 2. Sync local state if parent prop changes (e.g. filters update)
+  useEffect(() => {
+    setIsAnalyzed(hasAnalysis);
+  }, [hasAnalysis]);
 
   const handleSuccess = (eventId: string) => {
+    setIsAnalyzed(true); // Update button immediately
     setResultUrl(`/analysis/result?eventId=${eventId}`);
     setAnalysisStatus('ready');
   };
@@ -41,12 +50,22 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
     e.preventDefault();
     e.stopPropagation();
     
+    // Quick check: If we already know it's analyzed, just open the modal
+    if (isAnalyzed) {
+        setResultUrl(`/analysis/result?eventId=${event.id}`);
+        setAnalysisStatus('ready');
+        setIsAnalysisModalOpen(true);
+        return;
+    }
+
     setChecking(true);
     
     try {
+      // Double check DB (in case another user analyzed it since page load)
       const alreadyAnalyzed = await checkAnalysisExists(event.id);
 
       if (alreadyAnalyzed) {
+        setIsAnalyzed(true); // Update local state
         setChecking(false);
         setAnalysisStatus('ready');
         setResultUrl(`/analysis/result?eventId=${event.id}`);
@@ -54,31 +73,48 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
         return;
       }
 
+      // If not analyzed, open modal and start generation
       setIsAnalysisModalOpen(true);
       setAnalysisStatus('generating');
       setErrorMsg(null);
 
+      // Attempt analysis (will fail if limits reached)
       const result = await analyzeEvent(event, false);
 
-      // FIX: Handle both trial and daily limit errors by showing payment modal
-      if (result.error === "TRIAL_EXHAUSTED" || result.error === "DAILY_LIMIT_REACHED") {
-        setIsAnalysisModalOpen(false);
-        // Set context-specific text for the modal
+      // --- ERROR HANDLING & PAYMENT TRIGGER ---
+      // We check for all 3 conditions: Guest Trial, Daily Limit, or Credit Exhaustion
+      if (
+          result.error === "TRIAL_EXHAUSTED" || 
+          result.error === "DAILY_LIMIT_REACHED" || 
+          result.error === "INSUFFICIENT_CREDITS"
+      ) {
+        setIsAnalysisModalOpen(false); // Close the "Generating..." modal
+        
+        // Determine Message based on error type
         if (result.error === "TRIAL_EXHAUSTED") {
             setPaymentModalContent({
                 title: "Trial Exhausted",
-                description: "You have used your free analysis. Deploy the agent again to generate a fresh deep-dive report."
+                description: "You have used your free guest analysis. Sign in for daily free runs, or pay to proceed."
             });
-        } else { // DAILY_LIMIT_REACHED
+        } else if (result.error === "INSUFFICIENT_CREDITS") {
+            setPaymentModalContent({
+                title: "Credits Depleted",
+                description: "You have used all your available credits. Purchase a single run now or top up your balance."
+            });
+        } else {
              setPaymentModalContent({
                 title: "Daily Limit Reached",
-                description: "You've used your 5 free analyses for the day. You can purchase additional runs to continue."
+                description: "You've used your 5 free analyses for the day. You can purchase additional runs or credits to continue."
             });
         }
-        setIsPaymentModalOpen(true);
+        
+        setIsPaymentModalOpen(true); // Open Payment Modal
+      
       } else if (result.error) {
+        // Generic Error (API failure, etc)
         handleError(result.error);
       } else {
+        // Success
         window.dispatchEvent(new Event("trial_updated"));
         handleSuccess(event.id);
       }
@@ -91,12 +127,16 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
     }
   };
 
-  // handlePaymentAndGenerate is unchanged
   const handlePaymentAndGenerate = async () => {
     if (!isReady) {
-        alert("Please connect your wallet and 'Enable Trading' to proceed.");
-        setIsPaymentModalOpen(false);
-        return;
+        // Attempt to init session if not ready, or alert user
+        try {
+            await initializeSession();
+        } catch(e) {
+            alert("Please connect your wallet and 'Enable Trading' to proceed.");
+            setIsPaymentModalOpen(false);
+            return;
+        }
     }
 
     setIsPaying(true);
@@ -107,10 +147,12 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
         setIsPaying(false);
         setIsPaymentModalOpen(false);
 
+        // Re-open analysis modal now that we are paying
         setAnalysisStatus('generating');
         setErrorMsg(null);
         setIsAnalysisModalOpen(true);
 
+        // Pass the payment hash to bypass limits
         const result = await analyzeEvent(event, false, txHash);
 
         if (result.error) {
@@ -132,11 +174,13 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
         <button
           onClick={handleAnalyzeClick}
           className={`
-            w-full mt-4 py-3 rounded-none font-bold uppercase tracking-widest text-sm transition-all shadow-lg
+            w-full py-3 rounded-none font-bold uppercase tracking-widest text-sm transition-all shadow-lg
             flex items-center justify-center gap-2 border
             ${checking 
               ? "bg-zinc-900 text-orange-400 border-orange-900/20 cursor-wait min-h-[50px]" 
-              : "bg-orange-600 hover:bg-orange-500 text-black border-orange-400 shadow-orange-900/20"
+              : isAnalyzed
+                ? "bg-emerald-950/80 hover:bg-emerald-900 text-emerald-400 border-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.1)]" 
+                : "bg-orange-600 hover:bg-orange-500 text-black border-orange-400 shadow-orange-900/20"
             }
           `}
         >
@@ -149,7 +193,17 @@ export default function AnalyzeButton({ event }: { event: PolymarketEvent }) {
                    <span className="animate-bounce delay-150 text-lg">🦀</span>
                 </div>
             </div>
-          ) : "☢️ DEPLOY_AGENT"}
+          ) : isAnalyzed ? (
+            <div className="flex items-center gap-2">
+               <span>📄</span>
+               <span>VIEW ANALYSIS</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+               <span>☢️</span>
+               <span>DEPLOY AGENT</span>
+            </div>
+          )}
         </button>
 
         <PaymentModal 

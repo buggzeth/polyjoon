@@ -7,20 +7,17 @@ import { AnalysisResponse } from "../types/ai";
 export interface AnalysisRecord {
   id: string;
   event_id: string; 
-  user_id?: string; // Add this
+  user_id?: string;
   analysis_data: AnalysisResponse;
   created_at: string;
 }
 
-// Updated to accept userId
 export async function saveAnalysisToDB(eventId: string, data: AnalysisResponse, userId?: string) {
   const payload: any = {
     event_id: eventId,
     analysis_data: data
   };
 
-  // Only add user_id if the column exists in your DB schema. 
-  // Ideally, run: ALTER TABLE market_analysis ADD COLUMN user_id text;
   if (userId) {
     payload.user_id = userId;
   }
@@ -57,12 +54,11 @@ export async function getLatestAnalysis(eventId: string): Promise<AnalysisRecord
   return data as AnalysisRecord;
 }
 
-// --- NEW PAGINATION FUNCTION ---
 export async function fetchAnalysisPage(offset: number = 0, limit: number = 20): Promise<AnalysisRecord[]> {
   const { data, error } = await supabaseAdmin
     .from('market_analysis')
     .select('*')
-    .order('created_at', { ascending: false }) // Newest first
+    .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
 
   if (error || !data) {
@@ -84,8 +80,6 @@ export async function getUserDailyUsage(userId: string): Promise<number> {
 
   if (error) {
     console.error("Usage count error:", error);
-    // FIX: Fail OPEN instead of closed. If the DB check fails,
-    // let the user proceed. Don't block them.
     return 0; 
   }
   
@@ -95,7 +89,7 @@ export async function getUserDailyUsage(userId: string): Promise<number> {
 export async function checkAnalysisExists(eventId: string): Promise<boolean> {
   const { count, error } = await supabaseAdmin
     .from('market_analysis')
-    .select('*', { count: 'exact', head: true }) // head: true means don't fetch data, just count
+    .select('*', { count: 'exact', head: true })
     .eq('event_id', eventId);
 
   if (error) {
@@ -104,4 +98,35 @@ export async function checkAnalysisExists(eventId: string): Promise<boolean> {
   }
   
   return (count || 0) > 0;
+}
+
+// --- NEW BATCH FUNCTION TO PREVENT N+1 REQUESTS ---
+export async function checkAnalysesBatch(eventIds: string[]): Promise<string[]> {
+  if (!eventIds || eventIds.length === 0) return [];
+
+  // Fetch all event_ids from the list that exist in the analysis table
+  const { data, error } = await supabaseAdmin
+    .from('market_analysis')
+    .select('event_id')
+    .in('event_id', eventIds);
+
+  if (error || !data) {
+    console.error("Batch check error:", error);
+    return [];
+  }
+  
+  // Return unique IDs that have analyses
+  const foundIds = new Set(data.map((r: any) => r.event_id));
+  return Array.from(foundIds);
+}
+
+export async function getUserCreditBalance(userId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin
+    .from('user_credits')
+    .select('balance')
+    .eq('user_id', userId)
+    .single();
+
+  if (error || !data) return 0;
+  return data.balance;
 }

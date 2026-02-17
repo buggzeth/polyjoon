@@ -1,34 +1,34 @@
 // app/types/subscription.ts
-export type Tier = 'free' | 'basic' | 'semipro' | 'pro';
+export type PackageId = 'starter' | 'pro' | 'whale';
 
-export interface SubscriptionConfig {
-  id: Tier;
+export interface CreditPackage {
+  id: PackageId;
   name: string;
   price: number;
-  limit: number;
+  credits: number;
   description: string;
 }
 
-export const SUBSCRIPTION_TIERS: Record<string, SubscriptionConfig> = {
-  basic: {
-    id: 'basic',
-    name: 'Basic',
+export const CREDIT_PACKAGES: Record<string, CreditPackage> = {
+  starter: {
+    id: 'starter',
+    name: 'Starter Pack',
     price: 5,
-    limit: 50,
-    description: 'Casual forecasting. 50 gens/mo.',
-  },
-  semipro: {
-    id: 'semipro',
-    name: 'Semi-Pro',
-    price: 10,
-    limit: 150,
-    description: 'Serious volume. 150 gens/mo.',
+    credits: 50,
+    description: 'Entry level. 50 generations.',
   },
   pro: {
     id: 'pro',
-    name: 'Pro',
-    price: 20,
-    limit: 500,
-    description: 'Maximum alpha. 500 gens/mo.',
+    name: 'Pro Stack',
+    price: 15, // Better value
+    credits: 200,
+    description: 'Serious volume. 200 generations.',
+  },
+  whale: {
+    id: 'whale',
+    name: 'Whale Vault',
+    price: 50,
+    credits: 1000,
+    description: 'Maximum alpha. 1000 generations.',
   }
 };

@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from "react";
 import { PolymarketEvent } from "../types/polymarket";
 import EventCard from "./EventCard";
 import { fetchEvents } from "../actions/fetchEvents";
+import { checkAnalysesBatch } from "../actions/storage"; // Import batch check
 import CrabSpinner from "./CrabSpinner";
 
 interface EventFeedProps {
@@ -18,15 +19,15 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   
-  // Storage State: Prevents initial render from overwriting LS with defaults
+  // NEW: State to track which events have analyses (Map of ID -> boolean)
+  const [analyzedEventIds, setAnalyzedEventIds] = useState<Set<string>>(new Set());
+
+  // Storage State
   const [isStorageLoaded, setIsStorageLoaded] = useState(false);
 
   // --- FILTERS ---
-  // Volume Filter (Default 5M)
   const [volumeCap, setVolumeCap] = useState<number>(5000000); 
-  // Date Filter (Default 365 days)
   const [daysCap, setDaysCap] = useState<number>(365);
-  // Search Filter
   const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Debounced Values
@@ -65,7 +66,7 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
     loadSettings();
   }, []);
 
-  // 2. Save to LocalStorage when filters change
+  // 2. Save to LocalStorage
   useEffect(() => {
     if (!isStorageLoaded) return;
     localStorage.setItem("nuke_vol", volumeCap.toString());
@@ -73,7 +74,7 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
     localStorage.setItem("nuke_query", searchQuery);
   }, [volumeCap, daysCap, searchQuery, isStorageLoaded]);
 
-  // 3. Handle Debounce (Combine all filters)
+  // 3. Handle Debounce
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedVolumeCap(volumeCap);
@@ -83,7 +84,34 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
     return () => clearTimeout(timer);
   }, [volumeCap, daysCap, searchQuery]);
 
-  // Helper: Get ISO Date string for N days from now
+  // NEW: Batch check for analyses whenever `events` list updates
+  useEffect(() => {
+    const checkBatch = async () => {
+      // Identify IDs we haven't checked or just check the current visible set
+      // To keep it simple and stateless regarding "checked" status, we just check all current events
+      // Ideally, we optimize this to only check *new* events, but checking 20-40 IDs is fast.
+      if (events.length === 0) return;
+
+      const idsToCheck = events.map(e => e.id);
+      try {
+        const foundIds = await checkAnalysesBatch(idsToCheck);
+        if (foundIds.length > 0) {
+          setAnalyzedEventIds(prev => {
+            const next = new Set(prev);
+            foundIds.forEach(id => next.add(id));
+            return next;
+          });
+        }
+      } catch (e) {
+        console.error("Failed to check batch analysis", e);
+      }
+    };
+
+    if (events.length > 0) {
+        checkBatch();
+    }
+  }, [events]);
+
   const getIsoDate = (days: number) => {
     const date = new Date();
     date.setDate(date.getDate() + days);
@@ -92,11 +120,8 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
 
   // 4. Refetch when Filters Change
   useEffect(() => {
-    // Prevent fetching until storage is checked to avoid UI flicker/double fetch
     if (!isStorageLoaded) return;
 
-    // Optimization: If it's the very first render and values match initial props/empty state, 
-    // use the server-passed initialEvents to save a fetch.
     if (
       debouncedVolumeCap === 5000000 && 
       debouncedDaysCap === 365 && 
@@ -108,11 +133,10 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
       setIsLoading(true);
       setEvents([]); 
       setHasMore(true);
+      setAnalyzedEventIds(new Set()); // Reset analysis cache on filter change
       
       try {
         const endDateStr = getIsoDate(debouncedDaysCap);
-        
-        // Pass all filters including search query
         const newEvents = await fetchEvents(
           0, 
           20, 
@@ -154,7 +178,6 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
     setIsLoading(true);
     try {
       const endDateStr = getIsoDate(debouncedDaysCap);
-
       const newEvents = await fetchEvents(
         offset, 
         20, 
@@ -180,7 +203,6 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
     }
   };
 
-  // Formatting helpers
   const formatVol = (val: number) => {
     if (val >= 1000000) return `$${(val / 1000000).toFixed(1)}M`;
     if (val >= 1000) return `$${(val / 1000).toFixed(0)}k`;
@@ -193,7 +215,6 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
     return `${val} Days`;
   };
 
-  // Prevent rendering until we know the local storage state to avoid hydration mismatch/flicker
   if (!isStorageLoaded) {
     return <div className="min-h-[50vh] flex items-center justify-center"><CrabSpinner text="LOADING PREFERENCES..." /></div>;
   }
@@ -203,7 +224,6 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
       
       {/* --- Filter Control Bar --- */}
       <div className="bg-zinc-900/80 border border-orange-900/20 p-6 rounded-sm backdrop-blur-md shadow-2xl space-y-8">
-        
         {/* Search Bar */}
         <div className="relative w-full group">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -228,8 +248,6 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
 
         {/* Sliders Container */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 border-t border-orange-900/10 pt-6">
-            
-            {/* Volume Slider */}
             <div className="flex flex-col gap-4">
                 <div className="flex justify-between items-end">
                     <div>
@@ -252,14 +270,9 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
                         onChange={(e) => setVolumeCap(Number(e.target.value))}
                         className="w-full h-2 bg-orange-900/20 rounded-sm appearance-none cursor-pointer accent-indigo-500 hover:accent-orange-400"
                     />
-                    <div className="flex justify-between text-[10px] text-slate-600 font-mono uppercase mt-2">
-                        <span>$1k</span>
-                        <span>$5M</span>
-                    </div>
                 </div>
             </div>
 
-            {/* End Date Slider */}
             <div className="flex flex-col gap-4 border-t md:border-t-0 md:border-l border-orange-900/20 pt-4 md:pt-0 md:pl-8">
                 <div className="flex justify-between items-end">
                     <div>
@@ -282,29 +295,26 @@ export default function EventFeed({ initialEvents }: EventFeedProps) {
                         onChange={(e) => setDaysCap(Number(e.target.value))}
                         className="w-full h-2 bg-orange-900/20 rounded-sm appearance-none cursor-pointer accent-emerald-500 hover:accent-lime-400"
                     />
-                    <div className="flex justify-between text-[10px] text-slate-600 font-mono uppercase mt-2">
-                        <span>Today</span>
-                        <span>Next Year</span>
-                    </div>
                 </div>
             </div>
-
         </div>
       </div>
 
       {/* --- Grid --- */}
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-8">
         {events.map((event) => (
-          <EventCard key={event.id} event={event} />
+          <EventCard 
+            key={event.id} 
+            event={event} 
+            // Pass the boolean status prop from our batch set
+            hasAnalysis={analyzedEventIds.has(event.id)} 
+          />
         ))}
         
         {events.length === 0 && !isLoading && (
             <div className="col-span-full py-20 flex flex-col items-center justify-center text-center text-slate-500 border border-dashed border-orange-900/20 rounded-sm bg-zinc-900/30">
                 <span className="text-2xl mb-2">☢️</span>
                 <p className="font-mono text-sm">No markets found matching filters.</p>
-                {debouncedSearchQuery && (
-                  <p className="text-xs mt-2 text-orange-800">Query: "{debouncedSearchQuery}"</p>
-                )}
             </div>
         )}
       </div>

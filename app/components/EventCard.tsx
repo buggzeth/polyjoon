@@ -24,12 +24,11 @@ const formatDate = (dateString: string) => {
 
 interface EventCardProps {
   event: PolymarketEvent;
+  hasAnalysis?: boolean; // NEW: Passed from parent batch check
 }
 
-export default function EventCard({ event }: EventCardProps) {
+export default function EventCard({ event, hasAnalysis = false }: EventCardProps) {
   const [showAllMarkets, setShowAllMarkets] = useState(false);
-  
-  // NEW: State for the Data Modal
   const [showDataModal, setShowDataModal] = useState(false);
 
   const INITIAL_MARKETS_TO_SHOW = 3;
@@ -38,13 +37,10 @@ export default function EventCard({ event }: EventCardProps) {
   const now = Date.now();
 
   const validMarkets = markets.filter((m) => {
-    // 1. Filter out expired markets
     if (m.endDate) {
       const marketEnd = new Date(m.endDate).getTime();
       if (marketEnd <= now) return false;
     }
-
-    // 2. Filter out malformed data
     try {
       if (!m.outcomes || !m.outcomePrices) return false;
       JSON.parse(m.outcomes);
@@ -66,7 +62,6 @@ export default function EventCard({ event }: EventCardProps) {
 
   return (
     <>
-      {/* 1. The Modal (Rendered conditionally outside the card flow) */}
       {showDataModal && (
         <DataModal 
           eventId={event.id} 
@@ -74,9 +69,19 @@ export default function EventCard({ event }: EventCardProps) {
         />
       )}
 
-      <div className="bg-zinc-900 border border-orange-900/20 rounded-none hover:border-orange-500/50 transition-all duration-300 flex flex-col h-full relative group shadow-[0_0_15px_rgba(234,88,12,0.05)] hover:shadow-[0_0_20px_rgba(234,88,12,0.15)]">
+      <div className={`bg-zinc-900 border rounded-none transition-all duration-300 flex flex-col h-full relative group shadow-[0_0_15px_rgba(234,88,12,0.05)] hover:shadow-[0_0_20px_rgba(234,88,12,0.15)] ${hasAnalysis ? 'border-emerald-900/40 hover:border-emerald-500/50' : 'border-orange-900/20 hover:border-orange-500/50'}`}>
         
-        {/* 2. The Data Button (Top Right Absolute) */}
+        {/* NEW: Analysis Badge (Zero latency, props based) */}
+        {hasAnalysis && (
+           <div className="absolute -top-2.5 -left-1 z-20 bg-emerald-950 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-sm shadow-lg flex items-center gap-1">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+              </span>
+              ANALYSIS READY
+           </div>
+        )}
+
         <button
           onClick={(e) => {
             e.preventDefault();
@@ -104,14 +109,14 @@ export default function EventCard({ event }: EventCardProps) {
               className="w-12 h-12 rounded-sm object-cover bg-orange-900/20"
               onError={(e) => (e.currentTarget.style.display = 'none')}
             />
-            <div className="flex-1 min-w-0 pr-6"> {/* Added pr-6 to avoid overlap with button on mobile if visible */}
+            <div className="flex-1 min-w-0 pr-6">
               <h2 className="text-base font-bold text-orange-50 leading-snug mb-1 font-mono uppercase">
-        {event.title}
-     </h2>
+                {event.title}
+              </h2>
               <div className="flex items-center gap-3 text-xs text-slate-500 font-mono">
                 <span className="text-lime-400 font-mono text-xs">
-        VOL: {formatUSD(event.volume)} ☢️
-     </span>
+                   VOL: {formatUSD(event.volume)} ☢️
+                </span>
                 <span>
                    Ends: {formatDate(event.endDate)}
                 </span>
@@ -136,9 +141,23 @@ export default function EventCard({ event }: EventCardProps) {
           )}
         </div>
 
+        {/* --- NEW: Tags Section (Using existing event data) --- */}
+        {event.tags && event.tags.length > 0 && (
+          <div className="px-3 pb-2 bg-zinc-950 flex flex-wrap gap-1.5 mt-auto border-t border-zinc-800/50 pt-2">
+             {event.tags.slice(0, 5).map((tag) => (
+               <span 
+                 key={tag.slug || tag.label} 
+                 className="text-[10px] font-mono uppercase bg-zinc-900 text-zinc-500 px-1.5 py-0.5 rounded border border-zinc-800 hover:text-orange-400 hover:border-orange-900/50 transition-colors cursor-default"
+               >
+                 #{tag.label}
+               </span>
+             ))}
+          </div>
+        )}
+
         {/* --- Footer: Analyze Button --- */}
         <div className="p-3 bg-zinc-900 border-t border-zinc-800">
-          <AnalyzeButton event={event} />
+          <AnalyzeButton event={event} hasAnalysis={hasAnalysis} />
         </div>
       </div>
     </>
@@ -168,12 +187,10 @@ function MarketItem({ market }: { market: any }) {
           let barColor = "bg-slate-600";
           let textColor = "text-slate-300";
 
-          // Simple color logic
           const lower = outcome.toLowerCase();
           if (lower === "yes" || lower === "unc") { barColor = "bg-emerald-600"; textColor="text-emerald-100"; }
           else if (lower === "no" || lower === "kansas") { barColor = "bg-rose-600"; textColor="text-rose-100"; }
           else {
-             // Fallback for multi-choice
              const colors = ["bg-blue-500", "bg-purple-500", "bg-orange-500"];
              barColor = colors[idx % colors.length];
           }

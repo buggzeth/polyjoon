@@ -114,9 +114,9 @@ export default function PaymentModal({
         <div className="px-6 py-4">
             <div className="p-3 bg-zinc-950/50 rounded border border-zinc-800/50">
                 <div className="flex justify-between items-center mb-1">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">One-Time Run</span>
-                    <span className="text-xl font-mono font-bold text-white">{amount} USDC</span>
-                </div>
+    <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Single Run</span>
+    <span className="text-xl font-mono font-bold text-white">0.50 USDC</span> 
+</div>
                 <div className="text-[10px] text-slate-600 text-right">
                     Polygon Network
                 </div>

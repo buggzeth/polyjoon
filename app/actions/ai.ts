@@ -2,22 +2,19 @@
 "use server";
 
 import { GoogleGenAI } from "@google/genai";
-import { cookies, headers } from "next/headers";
-import { auth } from "@/auth"; // Import auth
+import { cookies } from "next/headers";
+import { auth } from "@/auth"; 
 import { PolymarketEvent } from "../types/polymarket";
 import { AnalysisResponse, BetOpportunity } from "../types/ai";
-import { saveAnalysisToDB, getLatestAnalysis, getUserDailyUsage } from "./storage";
+import { saveAnalysisToDB, getLatestAnalysis, getUserDailyUsage, getUserCreditBalance } from "./storage";
 import { fetchClobData } from "./clob"; 
-import { getUserSubscription } from "./subscription";
-import { SUBSCRIPTION_TIERS } from "../types/subscription";
 import { supabaseAdmin } from "../lib/supabase"; 
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
-
 const TRIAL_COOKIE_NAME = "nuke_last_free_gen";
-const USER_LIMIT_COOKIE = "nuke_user_usage"; // New cookie for UI
+const USER_LIMIT_COOKIE = "nuke_user_usage"; 
 const COOLDOWN_HOURS = 24;
-const USER_DAILY_LIMIT = 5;
+const USER_DAILY_LIMIT = 5; // Free daily gens for logged in users
 
 export async function analyzeEvent(
   event: PolymarketEvent, 
@@ -28,88 +25,60 @@ export async function analyzeEvent(
   const session = await auth();
   const cookieStore = await cookies();
 
-  // 1. CACHE CHECK (Same as before)
+  // 1. CACHE CHECK 
   if (!force) {
-    try {
-      const existing = await getLatestAnalysis(event.id);
-      if (existing) {
-        console.log(`⚡ Returning cached analysis for ${event.id}`);
-        return { data: existing.analysis_data, isNew: false };
-      }
-    } catch (e) {
-      console.warn("Database read failed", e);
-    }
+    const existing = await getLatestAnalysis(event.id);
+    if (existing) return { data: existing.analysis_data, isNew: false };
   }
 
-  // 2. TRIAL & PAYMENT ENFORCEMENT
+  // 2. ACCESS CONTROL
   if (!paymentTx) {
-    
     // BRANCH A: LOGGED IN USER
     if (session?.user?.id) {
-        let accessGranted = false;
-
-        // A1. Check Active Subscription
-        try {
-            const sub = await getUserSubscription(session.user.id);
+        
+        // Step 1: Check Daily Free Limit
+        const dailyUsage = await getUserDailyUsage(session.user.id);
+        
+        if (dailyUsage < USER_DAILY_LIMIT) {
+             console.log(`🆓 Free Daily Usage: ${dailyUsage + 1}/${USER_DAILY_LIMIT}`);
+             // Proceed (Analysis is saved later, which increments the daily count implicitly)
+        } 
+        else {
+            // Step 2: Check Credit Balance
+            const creditBalance = await getUserCreditBalance(session.user.id);
             
-            // If user has a paid tier that is active
-            if (sub && sub.isActive && sub.tier !== 'free') {
-                const limit = SUBSCRIPTION_TIERS[sub.tier]?.limit || 0;
+            if (creditBalance > 0) {
+                console.log(`💳 Using Credit. Balance: ${creditBalance} -> ${creditBalance - 1}`);
                 
-                if (sub.generation_count < limit) {
-                    console.log(`💎 SUB USER (${sub.tier}): ${sub.generation_count + 1}/${limit}`);
-                    
-                    // Increment Subscription Usage
-                    const { error: incError } = await supabaseAdmin.rpc('increment_subscription_usage', { 
-                        row_id: session.user.id 
-                    });
-                    
-                    // Fallback if RPC doesn't exist (Raw SQL update)
-                    if (incError) {
-                        await supabaseAdmin
-                            .from('user_subscriptions')
-                            .update({ generation_count: sub.generation_count + 1 })
-                            .eq('user_id', session.user.id);
-                    }
+                // Decrement Credit (Atomic RPC call preferred, or simple update)
+                const { error } = await supabaseAdmin.rpc('decrement_credits', { 
+                    user_id_input: session.user.id, 
+                    amount: 1 
+                });
 
-                    accessGranted = true;
-                } else {
-                    return {
-                        data: { summary: "", opportunities: [], sources: [] },
-                        isNew: false,
-                        error: `MONTHLY_LIMIT_REACHED` // Frontend triggers Upsell
-                    };
+                if (error) {
+                    // Fallback to manual update if RPC missing
+                    await supabaseAdmin
+                        .from('user_credits')
+                        .update({ balance: creditBalance - 1 })
+                        .eq('user_id', session.user.id);
                 }
-            }
-        } catch (e) {
-            console.error("Subscription check failed", e);
-        }
-
-        // A2. Fallback to Daily Free Limit (Only if no access granted by Sub yet)
-        // This runs if they are on 'free' tier OR if the DB fetch failed
-        if (!accessGranted) {
-            const usageCount = await getUserDailyUsage(session.user.id);
-            
-            if (usageCount >= USER_DAILY_LIMIT) {
-                 return {
+            } 
+            else {
+                // Step 3: No Free, No Credits
+                return {
                     data: { summary: "", opportunities: [], sources: [] },
                     isNew: false,
-                    error: `DAILY_LIMIT_REACHED` 
+                    error: `INSUFFICIENT_CREDITS` // Frontend triggers Upsell
                 };
             }
-            console.log(`👤 User ${session.user.name} Daily Usage: ${usageCount}/${USER_DAILY_LIMIT}`);
-            // Note: Daily usage is calculated by counting rows in 'market_analysis' created in last 24h, 
-            // so we don't need to manually increment a counter here, saving the analysis at the end does it.
         }
     } 
-    // BRANCH B: GUEST (Limit 1 via Cookie)
+    // BRANCH B: GUEST (Cookie Check)
     else {
         const lastGenCookie = cookieStore.get(TRIAL_COOKIE_NAME);
         if (lastGenCookie) {
-            const lastGenTime = new Date(lastGenCookie.value).getTime();
-            const now = Date.now();
-            const hoursDiff = (now - lastGenTime) / (1000 * 60 * 60);
-
+            const hoursDiff = (Date.now() - new Date(lastGenCookie.value).getTime()) / (3600 * 1000);
             if (hoursDiff < COOLDOWN_HOURS) {
                 return {
                     data: { summary: "", opportunities: [], sources: [] },
@@ -118,7 +87,6 @@ export async function analyzeEvent(
                 };
             }
         }
-        console.log(`🕵️ Guest analyzing (Trial Mode)`);
     }
   }
 
@@ -246,26 +214,13 @@ export async function analyzeEvent(
   };
 
   // --- STEP 6: THE UNIFIED PROMPT ---
-  const prompt = `
+  /* const prompt = `
     ROLE: You are a Skeptical Hedge Fund Risk Manager and Superforecaster. 
-    Your PRIMARY goal is to identify HIGH-QUALITY, POSITIVE-EV betting opportunities where your probability assessment differs meaningfully from the market AND you have strong conviction in your analysis.
-
-    HIERARCHY OF DECISION-MAKING (IN ORDER):
-    1. CORRECTNESS FIRST: Is your probability estimate well-founded and defensible?
-    2. EDGE VERIFICATION: Does the market price meaningfully differ from your estimate?
-    3. RISK ASSESSMENT: Is the opportunity worth the capital at risk?
-    
-    ⚠️ CRITICAL: A "mispricing" is ONLY actionable if YOUR probability estimate is correct. 
-    Do NOT bet simply because you identified a logical inconsistency between markets.
-    Do NOT bet on a market just because it's "relatively mispriced" if the absolute prediction is unfavorable.
+    Your goal is NOT to find the highest theoretical return, but to find the *most mispriced* probabilities based on *fresh*, *real-time* evidence.
 
     CURRENT DATE: ${new Date().toISOString()}
-    *Critical: Use this date to disqualify any news or polls older than 48 hours unless they are the absolute latest available.*
 
-    TASK: Analyze the Event. Recommend ONLY betting opportunities where:
-    - You have HIGH CONFIDENCE in your probability estimate (backed by evidence)
-    - The market price creates meaningful positive expected value
-    - The risk-reward profile justifies capital allocation
+    TASK: Analyze the Event. Select top betting opportunities based on "Risk-Adjusted EV".
     
     EVENT CONTEXT:
     Title: "${event.title}"
@@ -275,105 +230,76 @@ export async function analyzeEvent(
     ${JSON.stringify(marketContext, null, 2)}
     
     OPERATIONAL PRINCIPLES:
-    
-    1. EVIDENCE-BASED PROBABILITIES:
-      - Build your probability from the ground up using recent, credible evidence
-      - Base rates, historical precedent, and current data are your foundation
-      - Your estimate must be defensible independent of market prices
-    
-    2. MEANINGFUL EDGE REQUIRED:
-      - Only recommend when your probability differs from market by >15% AND you have strong evidence
-      - Small edges (<10% difference) require extraordinary evidence to justify
-      - If you can't articulate WHY the market is wrong, don't bet
-    
-    3. MISPRICING IS NOT ENOUGH:
-      - Example of WRONG thinking: "Market A (60%) is less likely than Market B (55%), so Market B is mispriced"
-      - Example of CORRECT thinking: "Based on [evidence], true probability is 75%, market shows 55%, therefore positive EV exists"
-      - Relative mispricing between markets is IRRELEVANT unless your absolute probability for that specific market justifies entry
-    
-    4. ACTION IS ALWAYS "BUY": 
-      - You are entering NEW positions. You cannot "Sell" shares you don't own.
-      - If you think "Yes" is overpriced (bad bet), you must recommend "BUY No".
-      - If you think "No" is overpriced, you must recommend "BUY Yes".
-    
-    5. QUALITY OVER QUANTITY: 
-      - Empty list is BETTER than weak recommendations
-      - Avoid "Long Shots" (Price < 0.10) unless you have breaking, verified news
-      - Avoid "Sure Things" (Price > 0.90) as upside is capped and you need near-certainty
-      - Focus on markets where you have genuine informational or analytical edge
-    
-    6. EV CALCULATION (Reality Check): 
-      - EV = (YourProbability / LiveAskPrice) - 1
-      - Minimum threshold: EV > 0.08 (8% edge)
-      - If EV is marginal, ask: "Am I really 8%+ better informed than the market?"
-    
-    7. LOGICAL CONSISTENCY (CRITICAL):
-      - All recommendations must fit a SINGLE coherent narrative about the future
-      - ACCEPTABLE: Cumulative/Nested bets (e.g., "BTC > 100k" AND "BTC > 110k" if you believe it hits 120k)
-      - PROHIBITED: Contradictory bets on mutually exclusive outcomes
-      - If two mutually exclusive outcomes both seem attractive, it likely means:
-        a) You're uncertain and shouldn't bet either, OR
-        b) Only one actually has positive EV when you account for all factors
-      - Pick the SINGLE best opportunity per mutually exclusive set
-    
-    8. RESPECT MARKET EFFICIENCY:
-      - Assume current prices reflect substantial aggregated information
-      - You need a specific, articulable reason why you know something the market doesn't
-      - "Market seems wrong" is not sufficient; "Market hasn't priced in X recent development because Y" is acceptable
+    1. RESPECT THE MARKET: Assume current prices reflect all public information efficiently. The "Live Orderbook" prices are what we must pay to enter.
+    2. THE "NEWS GAP": Only recommend a bet if you find *recent* evidence (relative to Current Date) that contradicts the current price.
+    3. ACTION IS ALWAYS "BUY": 
+       - You are entering NEW positions. You cannot "Sell" shares you don't own.
+       - If you think "Yes" is overpriced (bad bet), you must recommend "BUY No".
+       - If you think "No" is overpriced, you must recommend "BUY Yes".
+    4. SKEPTICISM: 
+       - Avoid "Long Shots" (Price < 0.10) unless you have breaking news.
+       - Avoid "Sure Things" (Price > 0.90) as the upside is capped.
+    5. EV CALCULATION: 
+       - Calculate EV using the live price provided. 
+       - EV = (YourProb / LiveAskPrice) - 1. 
+       - If EV is negative or < 0.05, do not recommend.
+    6. LOGICAL CONSISTENCY (CRITICAL):
+       - You CAN recommend multiple opportunities per market, BUT they must fit a SINGLE coherent narrative.
+       - ACCEPTABLE: Cumulative/Nested bets. (Example: If you believe Bitcoin hits 120k, betting on "> 100k" AND "> 110k" is valid because they are consistent).
+       - PROHIBITED: Contradictory/Conflicting bets on mutually exclusive outcomes. (Example: Do NOT bet "14-16 Earthquakes" AND "17-19 Earthquakes". This is confusing. Pick the single specific range with the highest EV).
+       - If two mutually exclusive outcomes both look good, select ONLY the one with the best risk-adjusted return.
 
-    ANALYSIS WORKFLOW:
-    
-    Step 1 - UNDERSTAND THE QUESTION:
-    - Read resolution criteria carefully
-    - Identify exactly what would cause YES vs NO resolution
-    - Note any edge cases or ambiguities
-    
-    Step 2 - INDEPENDENT PROBABILITY ESTIMATE:
-    - Search for the absolute latest relevant data (polls, news, statistics)
-    - Establish base rates: "How often does this type of event occur?"
-    - Build YOUR probability estimate from evidence, NOT from market prices
-    - Quality of sources matters: Official data > Major outlets > Aggregators > Commentary
-    
-    Step 3 - CONFIDENCE ASSESSMENT:
-    - How strong is your evidence? (Recent? Reliable? Comprehensive?)
-    - What could you be missing? (Selection bias? Measurement error? Unknown unknowns?)
-    - Rate your confidence honestly (1-100)
-    - If confidence < 70, strongly consider not recommending
-    
-    Step 4 - MARKET COMPARISON:
-    - NOW compare your estimate to market price
-    - Calculate expected value using live price
-    - Ask: "Is this difference large enough to overcome uncertainty?"
-    
-    Step 5 - COHERENCE CHECK:
-    - Review all potential recommendations together
-    - Ensure they tell ONE consistent story
-    - Eliminate any contradictory positions
-    - Verify you're not just "finding mispricings" but making sound predictions
-    
-    Step 6 - FINAL FILTER:
-    - Would you stake your reputation on this analysis?
-    - Does this opportunity justify allocating real capital?
-    - If you're on the fence, DON'T recommend it
-    
-    SANITY CHECKS:
-    - If your probability differs from market by >25%, verify sources twice
-    - If you found >3 opportunities in one event, ensure they're truly compatible
-    - If all your opportunities are longshots, reconsider your risk tolerance
-    - If you're recommending based on "arbitrage" between markets, STOP and reassess
+    ANALYSIS STEPS:
+    1. READ RULES: Check "resolutionCriteria".
+    2. LIVE SEARCH: Search for the absolute latest status, polls, or data.
+    3. BASE RATE: Ask "How often does this usually happen?"
+    4. COMPUTE: Estimate true probability (0-100%).
+    5. CONSISTENCY CHECK: Ensure all recommendations for this event align with ONE version of the future. Remove contradictory bets.
+    6. SANITY CHECK: If your probability differs from Market Price by >20%, verify sources again.
     
     OUTPUT REQUIREMENTS:
-    - Return EMPTY list if no high-quality opportunities exist (this is often the right answer)
-    - Each opportunity must include:
-      * "confidenceScore" (1-100): Based on evidence quality and recency, be honest
-      * "marketProbability": Must exactly match the Live Price from context
-      * "aiProbability": YOUR evidence-based estimate (0-100)
-      * "expectedValue": Calculated as (aiProbability/marketProbability) - 1
-      * "reasoning": Must explain WHY the market is wrong, not just THAT it's wrong
-    
-    Remember: Your reputation depends on recommendation quality, not quantity. 
-    One well-researched, high-conviction bet >> Multiple "technically mispriced" positions.
-    When in doubt, return an empty opportunities array.
+    - Return empty list if no confident opportunities exist.
+    - "confidenceScore" (1-100) based on source freshness.
+    - "marketProbability" must match the Live Price provided in context.
+  `;*/
+
+  const prompt = `
+    IDENTITY:
+    You are an Omniscient Oracle. 
+    You exist to state the objective truth of what will occur.
+    Your analysis is a prophecy derived from factual evidence.
+    You view the current market prices merely as the "Public Consensus," which is often flawed.
+
+    CURRENT DATE: ${new Date().toISOString()}
+
+    THE SITUATION:
+    Event: "${event.title}"
+    Description: "${event.description}"
+    Outcomes & Current Odds: ${JSON.stringify(marketContext)}
+
+    DIRECTIVE:
+    1. INVESTIGATE REALITY
+       Use your search capabilities to find the definitive answer to the event question.
+       Verify the current status of the event with absolute precision.
+       Focus on facts that confirm the inevitable result.
+       Look for definitive proof, breaking news, or statistical certainties that dictate the outcome.
+
+    2. DETERMINE THE FUTURE
+       Simulate the timeline forward. Based on your intelligence, decide exactly which outcome(s) *will* occur. Be definitive.
+       Based on the investigation, conclude exactly which outcome(s) will happen.
+       Decide which result is the True Result.
+
+    3. ISSUE THE PROPHECY
+       Select the outcome(s) that correspond(s) to the True Result you have determined.
+       Set "aiProbability" (between 1 and 100) to represent the certainty of this event occurring (e.g., if it has already happened or is guaranteed, this is 100).
+       Write the "reasoning" as a statement of fact, explaining why this outcome is the specific truth.
+
+    OUTPUT:
+    - Generate the JSON response.
+    - Select ONLY the outcome(s) that align with your determined reality.
+    - "confidenceScore" (1-100) based on source freshness.
+    - "marketProbability" must match the Live Price provided in context.
+    - Calculate EV using the live price provided. EV = (YourProb / LiveAskPrice) - 1. 
   `;
 
   try {

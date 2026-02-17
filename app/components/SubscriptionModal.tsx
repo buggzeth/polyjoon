@@ -3,9 +3,9 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { SUBSCRIPTION_TIERS, Tier } from "../types/subscription";
+import { CREDIT_PACKAGES, PackageId } from "../types/subscription"; // Updated import
 import { useTrading } from "../contexts/TradingContext";
-import { upgradeSubscription } from "../actions/subscription";
+import { purchaseCredits } from "../actions/subscription"; // Updated action
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 
@@ -18,7 +18,7 @@ export default function SubscriptionModal({ isOpen, onClose }: SubscriptionModal
   const [mounted, setMounted] = useState(false);
   const { transferUSDC, isReady, initializeSession } = useTrading();
   const { data: session } = useSession();
-  const [processingTier, setProcessingTier] = useState<Tier | null>(null);
+  const [processingId, setProcessingId] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -27,35 +27,32 @@ export default function SubscriptionModal({ isOpen, onClose }: SubscriptionModal
     return () => { document.body.style.overflow = 'unset'; };
   }, [isOpen]);
 
-  const handleSubscribe = async (tierId: string) => {
+  const handlePurchase = async (pkgId: string) => {
     if (!session) {
-        alert("Please sign in with Google first.");
+        alert("Please sign in first.");
         return;
     }
 
-    const tier = SUBSCRIPTION_TIERS[tierId];
-    setProcessingTier(tierId as Tier);
+    const pkg = CREDIT_PACKAGES[pkgId];
+    setProcessingId(pkgId);
 
     try {
       if (!isReady) await initializeSession();
 
-      // 1. Pay via Gnosis Safe
-      console.log(`Initiating subscription for ${tier.name}...`);
-      const txHash = await transferUSDC(tier.price);
+      console.log(`Initiating purchase for ${pkg.name}...`);
+      const txHash = await transferUSDC(pkg.price);
 
-      // 2. Update Server
-      await upgradeSubscription(tierId as Tier, txHash);
+      await purchaseCredits(pkgId as PackageId, txHash);
 
-      // 3. Refresh UI
       onClose();
       router.refresh();
-      window.dispatchEvent(new Event("trial_updated")); // Force hooks to re-fetch
+      window.dispatchEvent(new Event("trial_updated")); 
       
     } catch (e: any) {
       console.error(e);
-      alert(`Subscription failed: ${e.message}`);
+      alert(`Purchase failed: ${e.message}`);
     } finally {
-      setProcessingTier(null);
+      setProcessingId(null);
     }
   };
 
@@ -70,44 +67,37 @@ export default function SubscriptionModal({ isOpen, onClose }: SubscriptionModal
         {/* Left Panel */}
         <div className="p-6 md:w-1/3 bg-zinc-950 border-b md:border-b-0 md:border-r border-zinc-800 flex flex-col justify-between shrink-0">
           <div>
-            <div className="text-orange-500 font-bold tracking-widest text-xs mb-2">ACCESS CONTROL</div>
+            <div className="text-orange-500 font-bold tracking-widest text-xs mb-2">STORE</div>
             <h2 className="text-2xl md:text-3xl font-black text-white mb-4 uppercase italic leading-none">
-              Upgrade<br/>Protocol
+              Top Up<br/>Credits
             </h2>
             <p className="text-zinc-400 text-xs leading-relaxed mb-4">
-              Equip your agent with high-frequency capabilities. Subscriptions grant monthly generation quotas valid for 30 days.
+              Credits never expire. Purchase in bulk to save on gas fees and ensure uninterrupted agent uptime.
             </p>
-            {!session && (
-                <div className="bg-red-900/20 border border-red-900/50 p-3 rounded text-red-200 text-xs">
-                    ⚠️ You must be signed in with Google to subscribe.
-                </div>
-            )}
           </div>
           <div className="text-[10px] text-zinc-600 font-mono mt-4">
-            Payments via Polygon USDC.<br/>Secured by Gnosis Safe.
+            Balance updates instantly after confirmation.
           </div>
         </div>
 
-        {/* Tiers Grid (Scrollable on mobile) */}
+        {/* Packages Grid */}
         <div className="p-6 md:w-2/3 bg-zinc-900/50 overflow-y-auto custom-scrollbar">
           <div className="grid gap-4">
-            {Object.values(SUBSCRIPTION_TIERS).map((tier) => (
+            {Object.values(CREDIT_PACKAGES).map((pkg) => (
               <div 
-                key={tier.id}
+                key={pkg.id}
                 className={`
                   relative p-4 rounded-xl border transition-all duration-200
-                  ${processingTier === tier.id ? 'border-orange-500 bg-orange-950/10' : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500'}
-                  ${processingTier && processingTier !== tier.id ? 'opacity-50 grayscale' : ''}
+                  ${processingId === pkg.id ? 'border-orange-500 bg-orange-950/10' : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500'}
                 `}
               >
                 <div className="flex justify-between items-start mb-2">
                   <div>
-                      <h3 className="text-base font-bold text-white uppercase">{tier.name}</h3>
-                      <div className="text-xs text-zinc-500">{tier.description}</div>
+                      <h3 className="text-base font-bold text-white uppercase">{pkg.name}</h3>
+                      <div className="text-xs text-zinc-500">{pkg.description}</div>
                   </div>
                   <div className="text-right">
-                    <span className="text-xl font-mono font-bold text-white">${tier.price}</span>
-                    <span className="text-[10px] text-zinc-500 block">/30 DAYS</span>
+                    <span className="text-xl font-mono font-bold text-white">${pkg.price}</span>
                   </div>
                 </div>
 
@@ -115,19 +105,20 @@ export default function SubscriptionModal({ isOpen, onClose }: SubscriptionModal
 
                 <div className="flex items-center justify-between">
                     <div className="text-sm font-mono text-zinc-300">
-                        <span className="text-white font-bold">{tier.limit}</span> Gens/Mo
+                        <span className="text-white font-bold">{pkg.credits}</span> Credits
+                        <span className="text-[10px] text-zinc-500 ml-2">(${(pkg.price / pkg.credits).toFixed(2)} / unit)</span>
                     </div>
                     <button
-                        onClick={() => handleSubscribe(tier.id)}
-                        disabled={!!processingTier || !session}
+                        onClick={() => handlePurchase(pkg.id)}
+                        disabled={!!processingId || !session}
                         className={`
                             px-4 py-2 rounded text-xs font-bold uppercase tracking-wider transition-all
-                            ${processingTier === tier.id 
+                            ${processingId === pkg.id 
                             ? 'bg-orange-600 text-white animate-pulse' 
                             : 'bg-white text-black hover:bg-orange-500 hover:text-white disabled:bg-zinc-800 disabled:text-zinc-600'}
                         `}
                     >
-                        {processingTier === tier.id ? 'Processing...' : 'Select'}
+                        {processingId === pkg.id ? 'Confirming...' : 'Buy'}
                     </button>
                 </div>
               </div>
