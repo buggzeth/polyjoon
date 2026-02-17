@@ -13,13 +13,13 @@ export interface MockPosition {
   marketQuestion: string;
   recommendation: "BUY" | "SELL";
   outcome: string;
-  entryPrice: number; // The price observed by AI at generation
-  currentPrice: number; // Live price (or 1/0 if resolved)
-  stake: number; // Calculated mock stake in USD
+  entryPrice: number;
+  currentPrice: number;
+  stake: number;
   status: "OPEN" | "WON" | "LOST";
   pnl: number;
   marketId: string;
-  marketEndDate?: string; // <--- NEW FIELD: Essential for daily resolution reports
+  marketEndDate?: string;
 }
 
 export interface MockDashboardData {
@@ -73,11 +73,9 @@ export async function getMockDashboardData(): Promise<MockDashboardData> {
       
       const stake = (op.betSizeUnits || 1) * 10; 
 
-      // --- FIX: NORMALIZE ENTRY PRICE ---
-      // If AI saved "55" (cents), convert to 0.55. If "0.55", keep as is.
+      // Normalize Entry Price
       let rawEntry = Number(op.marketProbability);
       const entryPrice = rawEntry > 1 ? rawEntry / 100 : rawEntry;
-      // ----------------------------------
       
       let status: "OPEN" | "WON" | "LOST" = "OPEN";
       let currentPrice = entryPrice; 
@@ -91,7 +89,6 @@ export async function getMockDashboardData(): Promise<MockDashboardData> {
           
           if (outcomeIndex !== -1) {
              const prices = JSON.parse(liveMarket.outcomePrices);
-             // Current prices from API are always decimal (0.xx)
              currentPrice = Number(prices[outcomeIndex]);
           }
         } catch (e) { /* ignore */ }
@@ -102,7 +99,7 @@ export async function getMockDashboardData(): Promise<MockDashboardData> {
         }
       }
 
-      // Calculate PnL using the normalized prices
+      // Calculate PnL
       if (status === "WON") {
         const shares = stake / entryPrice;
         const payout = shares * 1.00; 
@@ -110,6 +107,8 @@ export async function getMockDashboardData(): Promise<MockDashboardData> {
       } else if (status === "LOST") {
         pnl = -stake;
       } else {
+        // For OPEN positions, we still calculate unrealized PnL for the list view,
+        // but we will exclude this from the dashboard total below.
         const shares = stake / entryPrice;
         const currentValue = shares * currentPrice;
         pnl = currentValue - stake;
@@ -135,13 +134,15 @@ export async function getMockDashboardData(): Promise<MockDashboardData> {
 
   const finishedTrades = positions.filter(p => p.status !== "OPEN");
   const wins = finishedTrades.filter(p => p.status === "WON").length;
-  const totalPnL = positions.reduce((acc, curr) => acc + curr.pnl, 0);
+  
+  // --- UPDATED LOGIC: Only sum PnL from finished trades ---
+  const realizedPnL = finishedTrades.reduce((acc, curr) => acc + curr.pnl, 0);
 
   return {
     stats: {
       totalTrades: positions.length,
       winRate: finishedTrades.length > 0 ? (wins / finishedTrades.length) * 100 : 0,
-      totalPnL,
+      totalPnL: realizedPnL, // This is now strictly Realized PnL
       activeVolume: positions.filter(p => p.status === "OPEN").reduce((acc, c) => acc + c.stake, 0)
     },
     positions

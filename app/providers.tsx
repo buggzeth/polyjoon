@@ -6,14 +6,18 @@ import { useState, type ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { config } from './lib/config';
 import { TradingProvider } from './contexts/TradingContext';
-import { SessionProvider } from 'next-auth/react'; // <-- 1. IMPORT THIS
+import { SessionProvider } from 'next-auth/react'; 
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(() => new QueryClient());
 
   return (
-    // 2. WRAP EVERYTHING WITH SessionProvider
-    <SessionProvider> 
+    <SessionProvider 
+      // 🛑 STOP THE POLLLING
+      refetchInterval={0} 
+      refetchOnWindowFocus={false} 
+      refetchWhenOffline={false}
+    > 
       <WagmiProvider config={config}>
         <QueryClientProvider client={queryClient}>
           <TradingProvider>

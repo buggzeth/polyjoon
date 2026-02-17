@@ -1,10 +1,15 @@
 // proxy.ts
 import { auth } from "@/auth"
 
-// Auth.js v5's 'auth' function signature is compatible with the Next.js Proxy signature
 export const proxy = auth;
 
 export const config = {
-  // Matcher excludes static assets to prevent running on every image load
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  // Regex explainer:
+  // 1. Negate (do not match) if path starts with api/
+  // 2. Negate if path starts with _next/static/ or _next/image/
+  // 3. Negate if path is favicon.ico
+  // 4. Negate if path ends with common image extensions
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"
+  ],
 }

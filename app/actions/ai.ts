@@ -8,6 +8,9 @@ import { PolymarketEvent } from "../types/polymarket";
 import { AnalysisResponse, BetOpportunity } from "../types/ai";
 import { saveAnalysisToDB, getLatestAnalysis, getUserDailyUsage } from "./storage";
 import { fetchClobData } from "./clob"; 
+import { getUserSubscription } from "./subscription";
+import { SUBSCRIPTION_TIERS } from "../types/subscription";
+import { supabaseAdmin } from "../lib/supabase"; 
 
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 
@@ -41,18 +44,63 @@ export async function analyzeEvent(
   // 2. TRIAL & PAYMENT ENFORCEMENT
   if (!paymentTx) {
     
-    // BRANCH A: LOGGED IN USER (Limit 5)
+    // BRANCH A: LOGGED IN USER
     if (session?.user?.id) {
-        const usageCount = await getUserDailyUsage(session.user.id);
-        
-        if (usageCount >= USER_DAILY_LIMIT) {
-             return {
-                data: { summary: "", opportunities: [], sources: [] },
-                isNew: false,
-                error: `DAILY_LIMIT_REACHED` // Frontend handles text (Buy more or wait)
-            };
+        let accessGranted = false;
+
+        // A1. Check Active Subscription
+        try {
+            const sub = await getUserSubscription(session.user.id);
+            
+            // If user has a paid tier that is active
+            if (sub && sub.isActive && sub.tier !== 'free') {
+                const limit = SUBSCRIPTION_TIERS[sub.tier]?.limit || 0;
+                
+                if (sub.generation_count < limit) {
+                    console.log(`💎 SUB USER (${sub.tier}): ${sub.generation_count + 1}/${limit}`);
+                    
+                    // Increment Subscription Usage
+                    const { error: incError } = await supabaseAdmin.rpc('increment_subscription_usage', { 
+                        row_id: session.user.id 
+                    });
+                    
+                    // Fallback if RPC doesn't exist (Raw SQL update)
+                    if (incError) {
+                        await supabaseAdmin
+                            .from('user_subscriptions')
+                            .update({ generation_count: sub.generation_count + 1 })
+                            .eq('user_id', session.user.id);
+                    }
+
+                    accessGranted = true;
+                } else {
+                    return {
+                        data: { summary: "", opportunities: [], sources: [] },
+                        isNew: false,
+                        error: `MONTHLY_LIMIT_REACHED` // Frontend triggers Upsell
+                    };
+                }
+            }
+        } catch (e) {
+            console.error("Subscription check failed", e);
         }
-        console.log(`👤 User ${session.user.name} Usage: ${usageCount}/${USER_DAILY_LIMIT}`);
+
+        // A2. Fallback to Daily Free Limit (Only if no access granted by Sub yet)
+        // This runs if they are on 'free' tier OR if the DB fetch failed
+        if (!accessGranted) {
+            const usageCount = await getUserDailyUsage(session.user.id);
+            
+            if (usageCount >= USER_DAILY_LIMIT) {
+                 return {
+                    data: { summary: "", opportunities: [], sources: [] },
+                    isNew: false,
+                    error: `DAILY_LIMIT_REACHED` 
+                };
+            }
+            console.log(`👤 User ${session.user.name} Daily Usage: ${usageCount}/${USER_DAILY_LIMIT}`);
+            // Note: Daily usage is calculated by counting rows in 'market_analysis' created in last 24h, 
+            // so we don't need to manually increment a counter here, saving the analysis at the end does it.
+        }
     } 
     // BRANCH B: GUEST (Limit 1 via Cookie)
     else {

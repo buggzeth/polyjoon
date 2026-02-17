@@ -1,11 +1,13 @@
 // app/hooks/useTrialLimit.ts
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
+import { getUserSubscription } from "../actions/subscription"; // Ensure this action exists
+import { getUserDailyUsage } from "../actions/storage"; // Ensure this action exists
+import { SUBSCRIPTION_TIERS } from "../types/subscription";
 
 const TRIAL_COOKIE_NAME = "nuke_last_free_gen";
-const USER_LIMIT_COOKIE = "nuke_user_usage";
 const COOLDOWN_HOURS = 24;
 
 export function useTrialLimit() {
@@ -16,7 +18,9 @@ export function useTrialLimit() {
     remaining: 0,
     isAvailable: true,
     nextRefillText: "",
-    percent: 0
+    percent: 0,
+    isSubscribed: false,
+    tierName: "Guest"
   });
 
   const getCookie = (name: string) => {
@@ -26,38 +30,78 @@ export function useTrialLimit() {
     return null;
   };
 
-  const calculate = () => {
-    // 1. Logged In User Logic
-    if (session) {
-      const usageVal = getCookie(USER_LIMIT_COOKIE);
-      const used = usageVal ? parseInt(usageVal, 10) : 0;
-      const limit = 5; // Operator Mode Limit
-      const remaining = Math.max(0, limit - used);
-      
-      setData({
-        limit,
-        used,
-        remaining,
-        isAvailable: remaining > 0,
-        nextRefillText: remaining > 0 ? "Ready" : "24h Limit Reached",
-        percent: (remaining / limit) * 100
-      });
-      return;
+  const calculate = useCallback(async () => {
+    // 1. LOGGED IN USER LOGIC
+    if (session?.user?.id) {
+        try {
+            // A. Check Subscription
+            const sub = await getUserSubscription(session.user.id);
+
+            if (sub && sub.isActive && sub.tier !== 'free') {
+                const tierConfig = SUBSCRIPTION_TIERS[sub.tier];
+                const limit = tierConfig.limit;
+                const used = sub.generation_count;
+                const remaining = Math.max(0, limit - used);
+                
+                // Format Date for refill text
+                const endDate = new Date(sub.end_date);
+                const refillText = `Refills ${endDate.toLocaleDateString()}`;
+
+                setData({
+                    limit,
+                    used,
+                    remaining,
+                    isAvailable: remaining > 0,
+                    nextRefillText: refillText,
+                    percent: (remaining / limit) * 100,
+                    isSubscribed: true,
+                    tierName: tierConfig.name
+                });
+                return;
+            }
+
+            // B. Free Tier (Daily Limit)
+            const dailyUsed = await getUserDailyUsage(session.user.id);
+            const dailyLimit = 5;
+            const remaining = Math.max(0, dailyLimit - dailyUsed);
+
+            setData({
+                limit: dailyLimit,
+                used: dailyUsed,
+                remaining,
+                isAvailable: remaining > 0,
+                nextRefillText: "Resets daily",
+                percent: (remaining / dailyLimit) * 100,
+                isSubscribed: false,
+                tierName: "Operator"
+            });
+
+        } catch (e) {
+            console.error("Error fetching usage stats", e);
+        }
+        return;
     }
 
-    // 2. Guest Logic
+    // 2. GUEST LOGIC (Cookie based)
     const limit = 1;
     const lastUsedTimestamp = getCookie(TRIAL_COOKIE_NAME);
 
     if (!lastUsedTimestamp) {
-      setData({ limit, used: 0, remaining: 1, isAvailable: true, nextRefillText: "Ready", percent: 100 });
+      setData({ 
+          limit, used: 0, remaining: 1, isAvailable: true, 
+          nextRefillText: "Ready", percent: 100, 
+          isSubscribed: false, tierName: "Guest" 
+      });
       return;
     }
 
     const lastDate = new Date(lastUsedTimestamp);
-    // Invalid Date check
     if (isNaN(lastDate.getTime())) {
-        setData({ limit, used: 0, remaining: 1, isAvailable: true, nextRefillText: "Ready", percent: 100 });
+        setData({ 
+            limit, used: 0, remaining: 1, isAvailable: true, 
+            nextRefillText: "Ready", percent: 100,
+            isSubscribed: false, tierName: "Guest" 
+        });
         return;
     }
 
@@ -66,7 +110,6 @@ export function useTrialLimit() {
     const cooldownMs = COOLDOWN_HOURS * 60 * 60 * 1000;
 
     if (diffMs < cooldownMs) {
-      // Cooldown Active
       const remainingMs = cooldownMs - diffMs;
       const hours = Math.floor(remainingMs / (1000 * 60 * 60));
       const mins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
@@ -77,23 +120,29 @@ export function useTrialLimit() {
         remaining: 0,
         isAvailable: false,
         nextRefillText: `${hours}h ${mins}m`,
-        percent: 0
+        percent: 0,
+        isSubscribed: false, 
+        tierName: "Guest"
       });
     } else {
-      // Available
-      setData({ limit, used: 0, remaining: 1, isAvailable: true, nextRefillText: "Ready", percent: 100 });
+      setData({ 
+          limit, used: 0, remaining: 1, isAvailable: true, 
+          nextRefillText: "Ready", percent: 100,
+          isSubscribed: false, tierName: "Guest" 
+      });
     }
-  };
+  }, [session]);
 
   useEffect(() => {
     calculate();
+    // Listen for custom event to trigger re-fetch after payment/generation
     window.addEventListener("trial_updated", calculate);
-    const interval = setInterval(calculate, 60000);
+    const interval = setInterval(calculate, 60000); // Check every minute
     return () => {
       clearInterval(interval);
       window.removeEventListener("trial_updated", calculate);
     };
-  }, [session]);
+  }, [calculate]);
 
   return data;
 }

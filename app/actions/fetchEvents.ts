@@ -5,14 +5,6 @@ import { PolymarketEvent } from "../types/polymarket";
 
 const BASE_URL = process.env.NEXT_PUBLIC_POLYMARKET_API_URL || "https://gamma-api.polymarket.com";
 
-/**
- * Strict filtering to ensure we only show events/markets that are currently betting.
- * 
- * Logic:
- * 1. Filter the event's 'markets' array to only keep those where endDate > now AND closed is false.
- * 2. If an event ends up with 0 valid markets, drop the event entirely.
- * 3. Double check the event's own 'endDate' and 'closed' status.
- */
 function filterActiveEvents(events: PolymarketEvent[]): PolymarketEvent[] {
   const now = Date.now();
 
@@ -38,7 +30,6 @@ function filterActiveEvents(events: PolymarketEvent[]): PolymarketEvent[] {
     });
 }
 
-// UPDATE: Added tagSlug optional parameter
 export async function fetchEvents(
   offset: number = 0, 
   limit: number = 20,
@@ -49,6 +40,12 @@ export async function fetchEvents(
 ): Promise<PolymarketEvent[]> {
   
   let data: PolymarketEvent[] = [];
+  
+  // CRITICAL FIX: "no-store" prevents the 2MB Data Cache error
+  const options: RequestInit = {
+    cache: "no-store", 
+    headers: { "Accept": "application/json" },
+  };
 
   // MODE 1: SEARCH
   if (query && query.trim().length > 0) {
@@ -63,10 +60,7 @@ export async function fetchEvents(
     });
 
     try {
-      const res = await fetch(`${BASE_URL}/public-search?${searchParams.toString()}`, {
-        cache: "no-store",
-        headers: { "Accept": "application/json" },
-      });
+      const res = await fetch(`${BASE_URL}/public-search?${searchParams.toString()}`, options);
       if (!res.ok) return [];
       const json = await res.json();
       data = json.events || [];
@@ -91,10 +85,7 @@ export async function fetchEvents(
     if (tagSlug) params.append("tag_slug", tagSlug);
 
     try {
-      const res = await fetch(`${BASE_URL}/events?${params.toString()}`, {
-        next: { revalidate: 60 },
-        headers: { "Accept": "application/json" },
-      });
+      const res = await fetch(`${BASE_URL}/events?${params.toString()}`, options);
 
       if (!res.ok) {
         console.error(`API Error: ${res.status}`);
@@ -111,9 +102,8 @@ export async function fetchEvents(
   return filterActiveEvents(data);
 }
 
-// NEW HELPER: Specifically for the Curated Sections
+// Wrapper for Curated Sections
 export async function fetchTopEventsByTag(tagSlug: string, limit: number = 3) {
-  // We use a high volume filter implicitly by sorting by volume in fetchEvents
   return await fetchEvents(0, limit, undefined, undefined, undefined, tagSlug);
 }
 

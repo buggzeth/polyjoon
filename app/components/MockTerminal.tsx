@@ -8,14 +8,12 @@ interface MockTerminalProps {
   data: MockDashboardData;
 }
 
-const ITEMS_PER_PAGE = 10; // Number of executions to show per page/load
+const ITEMS_PER_PAGE = 10; 
 
 export default function MockTerminal({ data }: MockTerminalProps) {
   const { stats, positions } = data;
   const [page, setPage] = useState(1);
 
-  // Group all positions by the analysis execution (recordId)
-  // useMemo ensures this expensive computation only runs when positions data changes
   const allGroupedExecutions = useMemo(() => {
     return Object.values(positions.reduce((acc, pos) => {
       if (!acc[pos.recordId]) {
@@ -31,7 +29,6 @@ export default function MockTerminal({ data }: MockTerminalProps) {
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [positions]);
 
-  // Derive the visible list based on the current page
   const visibleExecutions = useMemo(() => {
     return allGroupedExecutions.slice(0, page * ITEMS_PER_PAGE);
   }, [allGroupedExecutions, page]);
@@ -51,10 +48,10 @@ export default function MockTerminal({ data }: MockTerminalProps) {
             color={stats.winRate > 50 ? "text-lime-400" : "text-orange-400"} 
         />
         <StatCard 
-            label="Total PnL (USD)" 
+            label="Realized PnL (USD)" 
             value={`${stats.totalPnL > 0 ? '+' : ''}$${stats.totalPnL.toFixed(2)}`} 
             color={stats.totalPnL >= 0 ? "text-emerald-400" : "text-rose-400"}
-            subtext="Realized + Unrealized"
+            subtext="Closed Positions Only"
         />
         <StatCard 
             label="Active Exposure" 
@@ -157,7 +154,6 @@ function ExecutionItem({ group }: { group: { id: string, date: string, items: Mo
             {/* Dropdown Content */}
             {isOpen && (
                 <div className="bg-zinc-900/30 border-t border-zinc-800 divide-y divide-zinc-800/50">
-                    {/* HERE is where we loop, defining 'pos' */}
                     {group.items.map((pos, idx) => (
                         <div key={idx} className="p-4 grid grid-cols-1 md:grid-cols-12 gap-4 text-sm hover:bg-zinc-900/50">
                             
@@ -177,11 +173,10 @@ function ExecutionItem({ group }: { group: { id: string, date: string, items: Mo
                                 </div>
                             </div>
 
-                            {/* 2. Entry Details (UPDATED TO $) */}
+                            {/* 2. Entry Details */}
                             <div className="md:col-span-3 flex flex-col justify-center font-mono text-xs">
                                 <div className="flex justify-between text-zinc-400 mb-1">
                                     <span>Entry Price:</span>
-                                    {/* FIX: Use $ and toFixed(2) for normalized decimal prices */}
                                     <span className="text-slate-200">${pos.entryPrice.toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between text-zinc-400">
@@ -190,11 +185,10 @@ function ExecutionItem({ group }: { group: { id: string, date: string, items: Mo
                                 </div>
                             </div>
 
-                            {/* 3. Result Details (UPDATED TO $) */}
+                            {/* 3. Result Details */}
                             <div className="md:col-span-4 flex flex-col justify-center font-mono text-xs border-l border-zinc-800 md:pl-4">
                                 <div className="flex justify-between text-zinc-400 mb-1">
                                     <span>Current Price:</span>
-                                    {/* FIX: Use $ and toFixed(2) for normalized decimal prices */}
                                     <span className={`${pos.status === 'WON' ? 'text-lime-400' : 'text-zinc-300'}`}>
                                         ${pos.currentPrice.toFixed(2)}
                                     </span>
