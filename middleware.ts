@@ -1,5 +1,5 @@
 // proxy.ts
-export const runtime = 'edge';
+export const runtime = 'experimental-edge';
 
 import { auth } from "@/auth"
 
