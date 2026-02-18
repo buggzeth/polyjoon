@@ -213,56 +213,6 @@ export async function analyzeEvent(
     required: ["summary", "opportunities"]
   };
 
-  // --- STEP 6: THE UNIFIED PROMPT ---
-  /* const prompt = `
-    ROLE: You are a Skeptical Hedge Fund Risk Manager and Superforecaster. 
-    Your goal is NOT to find the highest theoretical return, but to find the *most mispriced* probabilities based on *fresh*, *real-time* evidence.
-
-    CURRENT DATE: ${new Date().toISOString()}
-
-    TASK: Analyze the Event. Select top betting opportunities based on "Risk-Adjusted EV".
-    
-    EVENT CONTEXT:
-    Title: "${event.title}"
-    Description: "${event.description}"
-    
-    MARKET DATA (LIVE EXECUTION PRICES):
-    ${JSON.stringify(marketContext, null, 2)}
-    
-    OPERATIONAL PRINCIPLES:
-    1. RESPECT THE MARKET: Assume current prices reflect all public information efficiently. The "Live Orderbook" prices are what we must pay to enter.
-    2. THE "NEWS GAP": Only recommend a bet if you find *recent* evidence (relative to Current Date) that contradicts the current price.
-    3. ACTION IS ALWAYS "BUY": 
-       - You are entering NEW positions. You cannot "Sell" shares you don't own.
-       - If you think "Yes" is overpriced (bad bet), you must recommend "BUY No".
-       - If you think "No" is overpriced, you must recommend "BUY Yes".
-    4. SKEPTICISM: 
-       - Avoid "Long Shots" (Price < 0.10) unless you have breaking news.
-       - Avoid "Sure Things" (Price > 0.90) as the upside is capped.
-    5. EV CALCULATION: 
-       - Calculate EV using the live price provided. 
-       - EV = (YourProb / LiveAskPrice) - 1. 
-       - If EV is negative or < 0.05, do not recommend.
-    6. LOGICAL CONSISTENCY (CRITICAL):
-       - You CAN recommend multiple opportunities per market, BUT they must fit a SINGLE coherent narrative.
-       - ACCEPTABLE: Cumulative/Nested bets. (Example: If you believe Bitcoin hits 120k, betting on "> 100k" AND "> 110k" is valid because they are consistent).
-       - PROHIBITED: Contradictory/Conflicting bets on mutually exclusive outcomes. (Example: Do NOT bet "14-16 Earthquakes" AND "17-19 Earthquakes". This is confusing. Pick the single specific range with the highest EV).
-       - If two mutually exclusive outcomes both look good, select ONLY the one with the best risk-adjusted return.
-
-    ANALYSIS STEPS:
-    1. READ RULES: Check "resolutionCriteria".
-    2. LIVE SEARCH: Search for the absolute latest status, polls, or data.
-    3. BASE RATE: Ask "How often does this usually happen?"
-    4. COMPUTE: Estimate true probability (0-100%).
-    5. CONSISTENCY CHECK: Ensure all recommendations for this event align with ONE version of the future. Remove contradictory bets.
-    6. SANITY CHECK: If your probability differs from Market Price by >20%, verify sources again.
-    
-    OUTPUT REQUIREMENTS:
-    - Return empty list if no confident opportunities exist.
-    - "confidenceScore" (1-100) based on source freshness.
-    - "marketProbability" must match the Live Price provided in context.
-  `;*/
-
   const prompt = `
     IDENTITY:
     You are an Omniscient Oracle. 
@@ -348,7 +298,7 @@ export async function analyzeEvent(
     };
 
     // Save with User ID if available
-    await saveAnalysisToDB(event.id, finalData, session?.user?.id);
+    await saveAnalysisToDB(event.id, finalData, session?.user?.id, event.slug);
 
     // POST-GENERATION COOKIE UPDATES
     if (!paymentTx) {

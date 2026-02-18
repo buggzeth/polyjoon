@@ -7,20 +7,25 @@ import { AnalysisResponse } from "../types/ai";
 export interface AnalysisRecord {
   id: string;
   event_id: string; 
+  event_slug?: string; // Added this
   user_id?: string;
   analysis_data: AnalysisResponse;
   created_at: string;
 }
 
-export async function saveAnalysisToDB(eventId: string, data: AnalysisResponse, userId?: string) {
+export async function saveAnalysisToDB(
+  eventId: string, 
+  data: AnalysisResponse, 
+  userId?: string, 
+  eventSlug?: string // Added this param
+) {
   const payload: any = {
     event_id: eventId,
     analysis_data: data
   };
 
-  if (userId) {
-    payload.user_id = userId;
-  }
+  if (userId) payload.user_id = userId;
+  if (eventSlug) payload.event_slug = eventSlug;
 
   const { error } = await supabaseAdmin
     .from('market_analysis')
@@ -39,6 +44,26 @@ export async function getAnalysisHistory(eventId: string): Promise<AnalysisRecor
   if (error || !data) return [];
   
   return data as AnalysisRecord[];
+}
+
+export async function getAnalysisBySlug(slug: string): Promise<AnalysisRecord | null> {
+  const { data, error } = await supabaseAdmin
+    .from('market_analysis')
+    .select('*')
+    .eq('event_slug', slug)
+    .order('created_at', { ascending: false }) // Get the freshest one
+    .limit(1)
+    .single();
+
+  if (error || !data) return null;
+  return data as AnalysisRecord;
+}
+
+// UPDATE 3: Fetch slugs for Sitemap
+export async function getAllAnalysisSlugs() {
+  const { data, error } = await supabaseAdmin.rpc('get_sitemap_slugs');
+  if (error) return [];
+  return data as { event_slug: string, last_modified: string }[];
 }
 
 export async function getLatestAnalysis(eventId: string): Promise<AnalysisRecord | null> {

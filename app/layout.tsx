@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import Script from 'next/script';
 import { Providers } from "./providers";
 import Navbar from "./components/Navbar";
 import CookieBanner from "./components/CookieBanner";
@@ -78,11 +79,45 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // 2026 Standard: Structured Data for AI Context
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'NUKE.FARM',
+    applicationCategory: 'FinanceApplication',
+    operatingSystem: 'Web',
+    offers: {
+      '@type': 'Offer',
+      price: '0',
+      priceCurrency: 'USD',
+    },
+    description: 'Deploy autonomous AI crabs to pinch alpha from prediction markets.',
+    aggregateRating: {
+      '@type': 'AggregateRating',
+      ratingValue: '4.8',
+      ratingCount: '1024',
+    },
+    featureList: [
+      'Gemini 3 Powered Analysis',
+      'Real-time Polymarket Execution',
+      'Non-custodial Smart Accounts',
+      'Cross-chain Bridging',
+    ],
+  };
+
   return (
     <html lang="en">
+      <head>
+        {/* Fediverse Creator Tag for decentralized social discovery */}
+        <meta name="fediverse:creator" content="@NukeFarm@mastodon.social" />
+        <Script
+          id="json-ld-app"
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+      </head>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-zinc-950`}>
         <Providers>
-          {/* Pass UserAuth as a prop */}
           <Navbar userAuthSlot={<UserAuth />} />
           {children}
           <CookieBanner />

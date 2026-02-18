@@ -305,7 +305,7 @@ function OpportunityCard({
         </div>
       </div>
       
-      <p className="text-xs text-zinc-400 font-mono border-l-2 border-slate-700 pl-3 mb-6 line-clamp-2">{data.marketQuestion}</p>
+      <p className="text-xs text-orange-400 font-mono border-l-2 border-slate-700 pl-3 mb-6 line-clamp-2">{data.marketQuestion}</p>
       
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-6">
         {/* Uses formatCents for normalized display */}
