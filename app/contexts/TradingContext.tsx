@@ -198,7 +198,7 @@ export const TradingProvider = ({ children }: { children: React.ReactNode }) => 
 
       // 4. Credentials
       setSessionStep("credentials");
-      const tempClob = new ClobClient(CLOB_API_URL, POLYGON_CHAIN_ID, signer);
+      const tempClob = new ClobClient(CLOB_API_URL, 137, signer);
       
       let creds: any = null;
 

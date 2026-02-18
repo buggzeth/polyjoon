@@ -1,5 +1,4 @@
 // app/profile/page.tsx
-export const runtime = 'edge';
 
 import ProfileView from "../components/ProfileView";
 import { auth } from "@/auth"; // Import auth

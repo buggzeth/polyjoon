@@ -1,5 +1,4 @@
 // app/analysis/result/page.tsx
-export const runtime = 'edge';
 
 import { getAnalysisHistory } from "../../actions/storage";
 import AnalysisView from "../../components/AnalysisView";

@@ -1,5 +1,4 @@
 // app/market/[slug]/page.tsx
-export const runtime = 'edge';
 
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';

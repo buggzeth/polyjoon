@@ -1,5 +1,4 @@
 // app/page.tsx
-export const runtime = 'edge';
 
 import { fetchEvents } from "./actions/fetchEvents";
 import EventFeed from "./components/EventFeed";
