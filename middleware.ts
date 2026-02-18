@@ -3,7 +3,7 @@ export const runtime = 'edge';
 
 import { auth } from "@/auth"
 
-export const proxy = auth;
+export const middleware = auth;
 
 export const config = {
   // Regex explainer:
