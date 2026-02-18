@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "pages:build": "npx @cloudflare/next-on-pages"
+    "pages:build": "pnpm exec @cloudflare/next-on-pages"
   },
   "dependencies": {
     "@auth/supabase-adapter": "^1.11.1",
