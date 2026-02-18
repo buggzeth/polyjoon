@@ -1,4 +1,6 @@
 // app/analysis/feed/page.tsx
+export const runtime = 'edge';
+
 import { fetchAnalysisPage } from "../../actions/storage";
 import AnalysisFeed from "../../components/AnalysisFeed";
 

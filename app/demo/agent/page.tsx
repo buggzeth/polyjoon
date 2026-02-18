@@ -1,4 +1,6 @@
 // app/demo/page.tsx
+export const runtime = 'edge';
+
 import { getMockDashboardData } from "@/app/actions/mock";
 import { getLatestReport } from "@/app/actions/performance"; // New
 import MockTerminal from "@/app/components/MockTerminal";

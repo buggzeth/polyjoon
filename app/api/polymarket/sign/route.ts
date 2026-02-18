@@ -1,4 +1,6 @@
 // app/api/polymarket/sign/route.ts
+export const runtime = 'edge';
+
 import { NextRequest, NextResponse } from "next/server";
 import {
   BuilderApiKeyCreds,
